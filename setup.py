@@ -7,6 +7,7 @@ setup(
     version="0.1.0",
     install_requires=[
         "torch",
+        "tqdm",
     ],
     extras_require={
         "tests": [

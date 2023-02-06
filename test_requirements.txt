@@ -92,6 +92,8 @@ tomli==1.2.1
     # via coverage
 torch==1.13.1
     # via vbzero
+tqdm==4.64.1
+    # via vbzero
 typing-extensions==4.4.0
     # via torch
 urllib3==1.26.7

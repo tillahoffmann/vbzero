@@ -364,8 +364,10 @@ tornado==6.2
     #   jupyter-client
     #   notebook
     #   terminado
-tqdm==4.64.0
-    # via -r dev_requirements.in
+tqdm==4.64.1
+    # via
+    #   -r test_requirements.txt
+    #   vbzero
 traitlets==5.3.0
     # via
     #   ipykernel
