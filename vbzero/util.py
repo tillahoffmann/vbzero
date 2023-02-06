@@ -1,4 +1,5 @@
-from enum import Enum
+from collections.abc import MutableMapping
+import functools as ft
 from numbers import Integral
 import numpy as np
 import torch as th
@@ -7,7 +8,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Optional, Union, Type
+from typing import Any, Callable, Optional, Union, Type
 
 
 def normalize_shape(shape: Optional[th.Size]) -> th.Size:
@@ -21,45 +22,67 @@ def normalize_shape(shape: Optional[th.Size]) -> th.Size:
     return shape
 
 
-class StochasticContextMode(Enum):
-    SAMPLE = "sample"
-    LOG_PROB = "log_prob"
-
-
-class StochasticContext:
+class SingletonContextMixin:
     """
-    Context for storing variables and evaluating log probabilities.
+    Baseclass for singleton contexts.
     """
-    DEFAULT_CONTEXT: Optional["StochasticContext"] = None
-    INSTANCE: Optional["StochasticContext"] = None
+    INSTANCE = None
 
-    def __init__(self, values: Optional[dict[str, th.Tensor]] = None,
-                 mode: StochasticContextMode = StochasticContextMode.SAMPLE) -> None:
-        self.mode = StochasticContextMode(mode)
-        self.log_probs: dict[str, th.Tensor] = {}
-        self.values = values or {}
-
-    def __enter__(self) -> "StochasticContext":
-        if StochasticContext.INSTANCE:
-            raise RuntimeError("only one log prob context can be active")
-        StochasticContext.INSTANCE = self
+    def __enter__(self):
+        cls = self.__class__
+        # "Reentrant" context manager.
+        if cls.is_active() and cls.INSTANCE is not self:
+            raise RuntimeError(f"a different {cls} context is already active")
+        cls.INSTANCE = self
         return self
 
-    def __exit__(*args) -> None:
-        StochasticContext.INSTANCE = None
+    def __exit__(self, *args):
+        self.__class__.INSTANCE = None
 
-    def log_prob(self, aggregate: bool = False) -> None:
-        """
-        Get the log probability for the stochastic context.
-        """
-        if not self.log_probs:
-            raise RuntimeError("log probs have not yet been evaluated")
-        return maybe_aggregate(self.log_probs, aggregate)
+    @classmethod
+    def get_instance(cls, *args, **kwargs):
+        return cls.INSTANCE if cls.is_active() else cls(*args, **kwargs)
+
+    @classmethod
+    def is_active(cls):
+        return cls.INSTANCE is not None
+
+
+class State(SingletonContextMixin, dict):
+    """
+    Dictionary-like context for managing the state of a model invocation. Values can only be set
+    once to ensure consistent state for each model invocation.
+    """
+    # Use `MutableMapping`'s implementation in terms of __setitem__ which we have overridden.
+    update = MutableMapping.update
+
+    def __setitem__(self, key: str, value: th.Tensor) -> None:
+        if key in self:
+            raise KeyError(f"key {key} has already been set")
+        return super().__setitem__(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        raise KeyError(f"keys cannot be removed; attempted {key}")
+
+
+class LogProb(SingletonContextMixin, dict):
+    """
+    Context for storing log probabilities.
+    """
+
+
+def hyperparam(name: str) -> Any:
+    """
+    Get a hyperparameter.
+    """
+    if not State.is_active():
+        raise RuntimeError("state context is not active; decorate your model with @model or create "
+                           "an explicit state")
+    return State.INSTANCE[name]
 
 
 def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-           sample_shape: Optional[th.Size] = None, context: Optional[StochasticContext] = None,
-           **kwargs) -> Any:
+           sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
     """
     Sample a value from a distribution or evaluate its log probability under the distribution.
 
@@ -73,16 +96,14 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
         context: Stochastic context for sampling or log probability evaluation. If :code:`context`
             is not given, random variables are drawn without reference to any state.
     """
-    context = context or StochasticContext.INSTANCE
+    if not State.is_active():
+        raise RuntimeError("state context is not active; decorate your model with @model or create "
+                           "an explicit state")
     sample_shape = normalize_shape(sample_shape)
-    if context:
-        mode = context.mode
-        x = context.values.get(name)
-    else:
-        mode = StochasticContextMode.SAMPLE
-        x = None
-    if mode == StochasticContextMode.LOG_PROB:  # We want to evaluate log probabilities.
-        if name in context.log_probs:
+    x = State.INSTANCE.get(name)
+
+    if LogProb.is_active():
+        if name in LogProb.INSTANCE:
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         if x is None:
             raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
@@ -91,18 +112,29 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
         if expected_shape != x.shape:
             raise ValueError(f"expected shape {expected_shape} for variable {name} but got "
                              f"{x.shape}")
-        context.log_probs[name] = dist.log_prob(x)
-    elif mode == StochasticContextMode.SAMPLE:  # We want to sample from the model.
+        LogProb.INSTANCE[name] = dist.log_prob(x)
+    else:
         if x is None:
             dist = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
             # We use sample rather than rsample here to generate samples from the model. This will
             # stop any gradients so we cannot differentiate through any forward passes.
             x = dist.sample(sample_shape)
-            if context:
-                context.values[name] = x
-    else:
-        raise ValueError(mode)
+            State.INSTANCE[name] = x
     return x
+
+
+def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Callable:
+    """
+    Condition a model with the given values.
+    """
+    @ft.wraps(func)
+    def _wrapper(*args, **kwargs) -> Any:
+        with State.get_instance() as state:
+            if values:
+                state.update(values)
+            state.update(kwvalues)
+            return func(*args, **kwargs)
+    return _wrapper
 
 
 def maybe_aggregate(value: dict[str, th.Tensor], aggregate: bool) -> Any:
@@ -114,7 +146,8 @@ def maybe_aggregate(value: dict[str, th.Tensor], aggregate: bool) -> Any:
     return value
 
 
-def train(loss: Module, optim: Optional[Optimizer] = None, scheduler: Optional[Any] = None,
+def train(loss: Module, loss_args: Optional[tuple] = None, loss_kwargs: Optional[dict] = None,
+          optim: Optional[Optimizer] = None, scheduler: Optional[Any] = None,
           num_steps_per_epoch: int = 1_000, num_epochs: Optional[int] = None,
           progress: Union[bool, tqdm] = True, atol: float = 0, rtol=0.001) -> dict:
     """
@@ -133,6 +166,8 @@ def train(loss: Module, optim: Optional[Optimizer] = None, scheduler: Optional[A
         scheduler = ReduceLROnPlateau(optim, verbose=True)
     if progress is True:
         progress = tqdm(total=num_epochs)
+    loss_args = loss_args or []
+    loss_kwargs = loss_kwargs or {}
 
     values = {}
     previous_entropy = None
@@ -144,7 +179,7 @@ def train(loss: Module, optim: Optional[Optimizer] = None, scheduler: Optional[A
             optim.zero_grad()
             loss_value: th.Tensor
             entropy: th.Tensor
-            loss_value, entropy = loss(return_entropy=True)
+            loss_value, entropy = loss(*loss_args, **loss_kwargs)
             loss_value.backward()
             optim.step()
 
@@ -174,3 +209,25 @@ def train(loss: Module, optim: Optional[Optimizer] = None, scheduler: Optional[A
         scheduler.step(current_loss)
 
     return values
+
+
+def model(func: Optional[Callable] = None, *, return_state: bool = False) -> Callable:
+    """
+    Handle state for a callable model.
+
+    Args:
+        return_state: Return the state of the decorated model.
+
+    Returns: Model with state handling.
+    """
+    if func:  # Directly wrap the callable.
+        @ft.wraps(func)
+        def _wrapper(*args, **kwargs) -> Any:
+            with State.get_instance() as state:
+                result = func(*args, **kwargs)
+            if return_state:
+                return result if result is None else (result, state)
+            return result
+        return _wrapper
+    else:  # Apply keyword arguments.
+        return ft.partial(model, return_state=return_state)
