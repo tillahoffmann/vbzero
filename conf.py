@@ -4,13 +4,14 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.autodoc",
     "sphinx.ext.intersphinx",
+    "sphinx_rtd_theme",
 ]
 project = "vbzero"
 napoleon_custom_sections = [("Returns", "params_style")]
 plot_formats = [
     ("png", 144),
 ]
-html_theme = "nature"
+html_theme = "sphinx_rtd_theme"
 
 # Configure autodoc to avoid excessively long fully-qualified names.
 add_module_names = False
@@ -19,7 +20,5 @@ autodoc_typehints_format = "short"
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
-    "matplotlib": ("https://matplotlib.org/stable", None),
     "torch": ("https://pytorch.org/docs/stable/", None),
 }

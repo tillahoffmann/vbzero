@@ -11,39 +11,40 @@ Models are declared as python functions using :func:`vbzero.util.sample` stateme
 .. doctest::
 
   >>> import torch as th
-  >>> from vbzero.util import sample, StochasticContext
+  >>> from vbzero.util import condition, LogProb, model, sample, State
 
-  >>> def model():
+  >>> @model
+  ... def biased_coin():
   ...     proba = sample("proba", th.distributions.Beta(1, 1))
   ...     x = sample("x", th.distributions.Bernoulli(proba), sample_shape=10)
   ...     return proba, x
 
   >>> th.manual_seed(1)  # For reproducibility.
   <torch...>
-  >>> model()
+  >>> biased_coin()
   (tensor(0.6003), tensor([1., 1., 0., ...]))
 
 
-If provided, state information is encapsulated in a :class:`vbzero.util.StochasticContext`. For example, we can access all variables as follows.
+If provided, state information is encapsulated in a :class:`vbzero.util.State`. For example, we can access all variables as follows.
 
 .. doctest::
 
   >>> th.manual_seed(1)  # For reproducibility.
   <torch...>
-  >>> with StochasticContext() as context:
-  ...     model()
+  >>> with State() as state:
+  ...     biased_coin()
   (tensor(0.6003), tensor([1., 1., 0., ...]))
-  >>> draw = context.values
-  >>> draw
+  >>> state
   {'proba': tensor(0.6003), 'x': tensor([1., 1., 0., ...])}
 
 
-Contexts can also be used to evaluate the likelihood of a sample under the model.
+The :class:`vbzero.util.LogProb` context can be used to evaluate the likelihood of a sample under the model.
 
 .. doctest::
 
-  >>> with StochasticContext(draw, mode="log_prob") as context:
-  ...     model()
+  >>> conditioned = condition(biased_coin, state)
+  >>> with LogProb() as log_prob:
+  ...     conditioned()
   (tensor(0.6003), tensor([1., 1., 0., ...]))
-  >>> context.log_probs
+  >>> log_prob
   {'proba': tensor(0.), 'x': tensor([-0.5103, -0.5103, -0.9171, ...])}

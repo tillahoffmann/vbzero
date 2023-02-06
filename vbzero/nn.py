@@ -2,9 +2,9 @@ import torch as th
 from torch.distributions import Distribution, Transform, TransformedDistribution, transform_to
 from torch.distributions.constraints import Constraint
 from torch.nn import Module, ModuleDict, Parameter, ParameterDict
-from typing import Any, Callable, Optional, Type, Union
+from typing import Any, Callable, Optional, Type
 from .approximation import DistributionDict
-from .util import StochasticContext, StochasticContextMode
+from .util import condition, maybe_aggregate, LogProb
 
 
 class ParametrizedDistribution(Module):
@@ -64,26 +64,17 @@ class ParameterizedDistributionDict(ModuleDict):
 
 
 class VariationalLoss(Module):
-    def __init__(self, model: Union[Distribution, Callable], approximation: Module,
-                 value: Optional[dict[str, th.Tensor]] = None) -> None:
+    def __init__(self, model: Callable, approximation: Module) -> None:
         super().__init__()
         self.model = model
         self.approximation = approximation
-        self.value = value
 
-    def forward(self, return_entropy: bool = False) -> th.Tensor:
+    def forward(self, *args, **kwargs) -> th.Tensor:
         # Evaluate a stochastic estimate of the expected log joint and add the entropy.
         dist: Distribution = self.approximation()
-        sample = dist.rsample(value=self.value)
+        sample = dist.rsample()
         entropy = dist.entropy(aggregate=True)
-        with StochasticContext(values=sample, mode=StochasticContextMode.LOG_PROB) as context:
-            if isinstance(self.model, Distribution):
-                self.model.rsample()
-            elif isinstance(self.model, Callable):
-                self.model()
-            else:
-                raise TypeError("model must be a torch distribution or callable")
-        elbo = context.log_prob(aggregate=True) + entropy
-        if return_entropy:
-            return - elbo, entropy
-        return - elbo
+        with LogProb() as log_prob:
+            condition(self.model, sample)(*args, **kwargs)
+        elbo = maybe_aggregate(log_prob, True) + entropy
+        return - elbo, entropy
