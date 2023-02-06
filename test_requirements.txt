@@ -23,7 +23,9 @@ colorama==0.4.5
 coverage[toml]==6.0.2
     # via pytest-cov
 docutils==0.17.1
-    # via sphinx
+    # via
+    #   sphinx
+    #   sphinx-rtd-theme
 doit==0.36.0
     # via doit-interface
 doit-interface==0.1.6
@@ -75,6 +77,10 @@ requests==2.26.0
 snowballstemmer==2.1.0
     # via sphinx
 sphinx==4.2.0
+    # via
+    #   sphinx-rtd-theme
+    #   vbzero
+sphinx-rtd-theme==1.1.1
     # via vbzero
 sphinxcontrib-applehelp==1.0.2
     # via sphinx
