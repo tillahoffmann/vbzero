@@ -1,3 +1,4 @@
+from enum import Enum
 from numbers import Integral
 import numpy as np
 import torch as th
@@ -6,7 +7,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, Type
 
 
 def normalize_shape(shape: Optional[th.Size]) -> th.Size:
@@ -20,47 +21,87 @@ def normalize_shape(shape: Optional[th.Size]) -> th.Size:
     return shape
 
 
-class LogProbContext:
-    """
-    Context for evaluating log probabilities.
-    """
-    INSTANCE: Optional["LogProbContext"] = None
+class StochasticContextMode(Enum):
+    SAMPLE = "sample"
+    LOG_PROB = "log_prob"
 
-    def __init__(self) -> None:
+
+class StochasticContext:
+    """
+    Context for storing variables and evaluating log probabilities.
+    """
+    DEFAULT_CONTEXT: Optional["StochasticContext"] = None
+    INSTANCE: Optional["StochasticContext"] = None
+
+    def __init__(self, values: Optional[dict[str, th.Tensor]] = None,
+                 mode: StochasticContextMode = StochasticContextMode.SAMPLE) -> None:
+        self.mode = StochasticContextMode(mode)
         self.log_probs: dict[str, th.Tensor] = {}
+        self.values = values or {}
 
-    def __enter__(self) -> "LogProbContext":
-        if LogProbContext.INSTANCE:
+    def __enter__(self) -> "StochasticContext":
+        if StochasticContext.INSTANCE:
             raise RuntimeError("only one log prob context can be active")
-        LogProbContext.INSTANCE = LogProbContext()
-        return LogProbContext.INSTANCE
+        StochasticContext.INSTANCE = self
+        return self
 
     def __exit__(*args) -> None:
-        LogProbContext.INSTANCE = None
+        StochasticContext.INSTANCE = None
 
     def log_prob(self, aggregate: bool = False) -> None:
+        """
+        Get the log probability for the stochastic context.
+        """
+        if not self.log_probs:
+            raise RuntimeError("log probs have not yet been evaluated")
         return maybe_aggregate(self.log_probs, aggregate)
 
 
-def sample(name: str, value: dict, dist_cls: Union[Distribution, type[Distribution]], *args,
-           sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
+           sample_shape: Optional[th.Size] = None, context: Optional[StochasticContext] = None,
+           **kwargs) -> Any:
     """
-    Sample a value if it does not already exist in the dictionary or evaluate log probabilities if a
-    :class:`.LogProbContext` is active.
+    Sample a value from a distribution or evaluate its log probability under the distribution.
+
+    Args:
+        name: Name of the variable to sample.
+        dist_cls: Distribution or callable that returns a distribution given :code:`*args` and
+            :code:`**kwargs`.
+        *args: Positional arguments passed to :code:`dist_cls` if it is not a distribution.
+        **kwargs: Keyword arguments passed to :code:`dist_cls` if it is not a distribution.
+        sample_shape: Shape of the sample to draw.
+        context: Stochastic context for sampling or log probability evaluation. If :code:`context`
+            is not given, random variables are drawn without reference to any state.
     """
-    x = value.get(name)
-    if instance := LogProbContext.INSTANCE:  # We want to evaluate log probabilities.
-        if name in instance.log_probs:
+    context = context or StochasticContext.INSTANCE
+    sample_shape = normalize_shape(sample_shape)
+    if context:
+        mode = context.mode
+        x = context.values.get(name)
+    else:
+        mode = StochasticContextMode.SAMPLE
+        x = None
+    if mode == StochasticContextMode.LOG_PROB:  # We want to evaluate log probabilities.
+        if name in context.log_probs:
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         if x is None:
             raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
         dist = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
-        instance.log_probs[name] = dist.log_prob(x)
-    else:  # We want to sample from the model.
+        expected_shape = sample_shape + dist.batch_shape + dist.event_shape
+        if expected_shape != x.shape:
+            raise ValueError(f"expected shape {expected_shape} for variable {name} but got "
+                             f"{x.shape}")
+        context.log_probs[name] = dist.log_prob(x)
+    elif mode == StochasticContextMode.SAMPLE:  # We want to sample from the model.
         if x is None:
             dist = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
-            x = dist.rsample(normalize_shape(sample_shape))
-            value[name] = x
+            # We use sample rather than rsample here to generate samples from the model. This will
+            # stop any gradients so we cannot differentiate through any forward passes.
+            x = dist.sample(sample_shape)
+            if context:
+                context.values[name] = x
+    else:
+        raise ValueError(mode)
     return x
 
 
