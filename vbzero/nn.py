@@ -64,9 +64,16 @@ class ParameterizedDistributionDict(ModuleDict):
 
 
 class VariationalLoss(Module):
-    def forward(self, model: Model, approximation: Approximation,
-                value: Optional[dict[str, th.Tensor]] = None) -> th.Tensor:
+    def __init__(self, model: Model, approximation: Module,
+                 value: Optional[dict[str, th.Tensor]] = None) -> None:
+        super().__init__()
+        self.model = model
+        self.approximation = approximation
+        self.value = value
+
+    def forward(self) -> th.Tensor:
         # Evaluate a stochastic estimate of the expected log joint and add the entropy.
-        elbo = model.log_prob(approximation.rsample(value=value), aggregate=True) \
-            + approximation.entropy(aggregate=True)
+        dist: Distribution = self.approximation()
+        sample = dist.rsample(value=self.value)
+        elbo = self.model.log_prob(sample, aggregate=True) + dist.entropy(aggregate=True)
         return - elbo
