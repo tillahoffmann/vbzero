@@ -2,10 +2,9 @@ import torch as th
 from torch.distributions import Distribution, Transform, TransformedDistribution, transform_to
 from torch.distributions.constraints import Constraint
 from torch.nn import Module, ModuleDict, Parameter, ParameterDict
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Type, Union
 from .approximation import DistributionDict
-from .model import Model
-from .util import LogProbContext
+from .util import StochasticContext, StochasticContextMode
 
 
 class ParametrizedDistribution(Module):
@@ -20,7 +19,7 @@ class ParametrizedDistribution(Module):
         transforms: Transformations to apply to the base distribution.
         **kwargs: Initial conditions of the distribution.
     """
-    def __init__(self, cls: type[Distribution], *, const: Optional[set[str]] = None,
+    def __init__(self, cls: Type[Distribution], *, const: Optional[set[str]] = None,
                  transforms: Optional[list[Transform]] = None, **kwargs: dict[str, Any]):
         super().__init__()
         const = const or set()
@@ -42,7 +41,7 @@ class ParametrizedDistribution(Module):
                 self.parameter_transforms[key] = transform
         self.unconstrained = ParameterDict(unconstrained)
 
-    def forward(self) -> type[Distribution]:
+    def forward(self) -> Type[Distribution]:
         # Transform unconstrained parameters to the constrained space and add constant parameters.
         kwargs = {key: self.parameter_transforms[key](value) for key, value in
                   self.unconstrained.items()}
@@ -65,7 +64,7 @@ class ParameterizedDistributionDict(ModuleDict):
 
 
 class VariationalLoss(Module):
-    def __init__(self, model: Model, approximation: Module,
+    def __init__(self, model: Union[Distribution, Callable], approximation: Module,
                  value: Optional[dict[str, th.Tensor]] = None) -> None:
         super().__init__()
         self.model = model
@@ -77,11 +76,11 @@ class VariationalLoss(Module):
         dist: Distribution = self.approximation()
         sample = dist.rsample(value=self.value)
         entropy = dist.entropy(aggregate=True)
-        with LogProbContext() as context:
+        with StochasticContext(values=sample, mode=StochasticContextMode.LOG_PROB) as context:
             if isinstance(self.model, Distribution):
-                self.model.rsample(value=sample)
+                self.model.rsample()
             elif isinstance(self.model, Callable):
-                self.model(value=sample)
+                self.model()
             else:
                 raise TypeError("model must be a torch distribution or callable")
         elbo = context.log_prob(aggregate=True) + entropy
