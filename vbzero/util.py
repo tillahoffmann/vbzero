@@ -42,7 +42,7 @@ class LogProbContext:
         return maybe_aggregate(self.log_probs, aggregate)
 
 
-def sample(name: str, value: dict, cls: type[Distribution], *args,
+def sample(name: str, value: dict, dist_cls: Union[Distribution, type[Distribution]], *args,
            sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
     """
     Sample a value if it does not already exist in the dictionary or evaluate log probabilities if a
@@ -54,11 +54,11 @@ def sample(name: str, value: dict, cls: type[Distribution], *args,
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         if x is None:
             raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
-        dist = cls(*args, **kwargs)
+        dist = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
         instance.log_probs[name] = dist.log_prob(x)
     else:  # We want to sample from the model.
         if x is None:
-            dist = cls(*args, **kwargs)
+            dist = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
             x = dist.rsample(normalize_shape(sample_shape))
             value[name] = x
     return x

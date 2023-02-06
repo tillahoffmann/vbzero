@@ -2,7 +2,7 @@ import torch as th
 from torch.distributions import Distribution, Transform, TransformedDistribution, transform_to
 from torch.distributions.constraints import Constraint
 from torch.nn import Module, ModuleDict, Parameter, ParameterDict
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from .approximation import DistributionDict
 from .model import Model
 from .util import LogProbContext
@@ -78,7 +78,12 @@ class VariationalLoss(Module):
         sample = dist.rsample(value=self.value)
         entropy = dist.entropy(aggregate=True)
         with LogProbContext() as context:
-            self.model.rsample(value=sample)
+            if isinstance(self.model, Distribution):
+                self.model.rsample(value=sample)
+            elif isinstance(self.model, Callable):
+                self.model(value=sample)
+            else:
+                raise TypeError("model must be a torch distribution or callable")
         elbo = context.log_prob(aggregate=True) + entropy
         if return_entropy:
             return - elbo, entropy
