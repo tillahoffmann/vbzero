@@ -82,3 +82,6 @@ class MeanField(Distribution):
     def entropy(self, aggregate: bool = False) -> Any:
         ent = {name: distribution.entropy() for name, distribution in self.distributions.items()}
         return maybe_aggregate(ent, aggregate)
+
+    def __getitem__(self, name: str) -> Distribution:
+        return self.distributions[name]
