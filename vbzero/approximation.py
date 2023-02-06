@@ -67,7 +67,7 @@ class MeanField(Distribution):
                              f"expected {', '.join(self.distributions)}")
 
     def rsample(self, sample_shape: Optional[th.Size] = None, value: Optional[dict] = None) -> dict:
-        value = value or {}
+        value = value.copy() if value else {}
         sample_shape = normalize_shape(sample_shape)
         for name, distribution in self.distributions.items():
             if name not in value:
