@@ -3,8 +3,8 @@ from torch.distributions import Distribution, Transform, TransformedDistribution
 from torch.distributions.constraints import Constraint
 from torch.nn import Module, ModuleDict, Parameter, ParameterDict
 from typing import Any, Optional
-from .approximation import Approximation
 from .model import Model
+from .approximation import DistributionDict
 
 
 class ParametrizedDistribution(Module):
@@ -58,8 +58,9 @@ class ParameterizedDistributionDict(ModuleDict):
     Dictionary of parameterized distributions.
     """
     def forward(self) -> dict[str, Distribution]:
-        return {name: parameterized_distribution() for name, parameterized_distribution in
-                self.items()}
+        return DistributionDict({
+            name: parameterized_distribution() for name, parameterized_distribution in self.items()
+        })
 
 
 class VariationalLoss(Module):

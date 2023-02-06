@@ -44,7 +44,7 @@ class Approximation(Distribution):
         raise NotImplementedError
 
 
-class MeanField(Distribution):
+class DistributionDict(Distribution):
     """
     Mean-field approximation.
 
