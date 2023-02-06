@@ -3,8 +3,9 @@ from torch.distributions import Distribution, Transform, TransformedDistribution
 from torch.distributions.constraints import Constraint
 from torch.nn import Module, ModuleDict, Parameter, ParameterDict
 from typing import Any, Optional
-from .model import Model
 from .approximation import DistributionDict
+from .model import Model
+from .util import LogProbContext
 
 
 class ParametrizedDistribution(Module):
@@ -76,7 +77,9 @@ class VariationalLoss(Module):
         dist: Distribution = self.approximation()
         sample = dist.rsample(value=self.value)
         entropy = dist.entropy(aggregate=True)
-        elbo = self.model.log_prob(sample, aggregate=True) + entropy
+        with LogProbContext() as context:
+            self.model.rsample(value=sample)
+        elbo = context.log_prob(aggregate=True) + entropy
         if return_entropy:
             return - elbo, entropy
         return - elbo

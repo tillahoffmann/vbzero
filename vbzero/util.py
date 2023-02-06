@@ -20,18 +20,48 @@ def normalize_shape(shape: Optional[th.Size]) -> th.Size:
     return shape
 
 
-def maybe_sample(name: str, value: dict, cls: type[Distribution], *args,
-                 sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+class LogProbContext:
     """
-    Sample a value if it does not already exist in the dictionary.
+    Context for evaluating log probabilities.
     """
-    try:
-        return value[name]
-    except KeyError:
+    INSTANCE: Optional["LogProbContext"] = None
+
+    def __init__(self) -> None:
+        self.log_probs: dict[str, th.Tensor] = {}
+
+    def __enter__(self) -> "LogProbContext":
+        if LogProbContext.INSTANCE:
+            raise RuntimeError("only one log prob context can be active")
+        LogProbContext.INSTANCE = LogProbContext()
+        return LogProbContext.INSTANCE
+
+    def __exit__(*args) -> None:
+        LogProbContext.INSTANCE = None
+
+    def log_prob(self, aggregate: bool = False) -> None:
+        return maybe_aggregate(self.log_probs, aggregate)
+
+
+def sample(name: str, value: dict, cls: type[Distribution], *args,
+           sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+    """
+    Sample a value if it does not already exist in the dictionary or evaluate log probabilities if a
+    :class:`.LogProbContext` is active.
+    """
+    x = value.get(name)
+    if instance := LogProbContext.INSTANCE:  # We want to evaluate log probabilities.
+        if name in instance.log_probs:
+            raise RuntimeError(f"log probability has already been evaluated for variable {name}")
+        if x is None:
+            raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
         dist = cls(*args, **kwargs)
-        x = dist.rsample(normalize_shape(sample_shape))
-        value[name] = x
-        return x
+        instance.log_probs[name] = dist.log_prob(x)
+    else:  # We want to sample from the model.
+        if x is None:
+            dist = cls(*args, **kwargs)
+            x = dist.rsample(normalize_shape(sample_shape))
+            value[name] = x
+    return x
 
 
 def maybe_aggregate(value: dict[str, th.Tensor], aggregate: bool) -> Any:

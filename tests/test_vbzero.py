@@ -1,5 +1,5 @@
 import torch as th
-from typing import Any
+from typing import Optional
 import vbzero as vz
 
 
@@ -12,11 +12,14 @@ def test_integration() -> None:
     class CoinModel(vz.model.Model):
         arg_constraints = {}
 
-        def log_prob(self, value: dict, aggregate: bool = False) -> Any:
-            return vz.util.maybe_aggregate({
-                "proba": th.distributions.Beta(1, 1).log_prob(value["proba"]),
-                "x": th.distributions.Bernoulli(value["proba"]).log_prob(value["x"]).sum(),
-            }, aggregate)
+        def rsample(self, sample_shape: Optional[th.Size] = None, value: Optional[dict] = None) \
+                -> dict:
+            value = value.copy() if value else {}
+            proba = vz.util.sample("proba", value, th.distributions.Beta, concentration0=1,
+                                   concentration1=1, sample_shape=sample_shape)
+            vz.util.sample("x", value, th.distributions.Bernoulli, probs=proba,
+                           sample_shape=sample_shape)
+            return value
     model = CoinModel()
 
     # Parameterize the variational approximation for optimization.
