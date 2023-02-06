@@ -29,11 +29,7 @@ def test_integration() -> None:
     variational = vz.nn.VariationalLoss(model, distributions, value={"x": x})
     optim = th.optim.Adam(distributions.parameters(), lr=0.01)
 
-    for _ in range(1000):
-        optim.zero_grad()
-        loss_value = variational()
-        loss_value.backward()
-        optim.step()
+    vz.util.train(variational, optim, rtol=0.01)
 
     expected = (x.sum() + 1) / (x.numel() + 2)
     actual = distributions()["proba"].mean

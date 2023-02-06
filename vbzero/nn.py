@@ -71,9 +71,12 @@ class VariationalLoss(Module):
         self.approximation = approximation
         self.value = value
 
-    def forward(self) -> th.Tensor:
+    def forward(self, return_entropy: bool = False) -> th.Tensor:
         # Evaluate a stochastic estimate of the expected log joint and add the entropy.
         dist: Distribution = self.approximation()
         sample = dist.rsample(value=self.value)
-        elbo = self.model.log_prob(sample, aggregate=True) + dist.entropy(aggregate=True)
+        entropy = dist.entropy(aggregate=True)
+        elbo = self.model.log_prob(sample, aggregate=True) + entropy
+        if return_entropy:
+            return - elbo, entropy
         return - elbo

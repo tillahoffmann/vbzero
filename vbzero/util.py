@@ -1,7 +1,12 @@
 from numbers import Integral
+import numpy as np
 import torch as th
 from torch.distributions import Distribution
-from typing import Any, Optional
+from torch.nn import Module
+from torch.optim import Adam, Optimizer
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from tqdm import tqdm
+from typing import Any, Optional, Union
 
 
 def normalize_shape(shape: Optional[th.Size]) -> th.Size:
@@ -36,3 +41,65 @@ def maybe_aggregate(value: dict[str, th.Tensor], aggregate: bool) -> Any:
     if aggregate:
         return sum(x.sum() for x in value.values())
     return value
+
+
+def train(loss: Module, optim: Optional[Optimizer] = None, scheduler: Optional[Any] = None,
+          num_steps_per_epoch: int = 1_000, num_epochs: Optional[int] = None,
+          progress: Union[bool, tqdm] = True, atol: float = 0, rtol=0.001) -> dict:
+    """
+    Minimize a variational loss with sensible defaults.
+
+    Args:
+        loss: Variational loss to optimize.
+        optim: Optimizer (defaults to an :class:`torch.optim.Adam` optimizer).
+        scheduler: Learning rate scheduler (defaults to a
+            :class:`torch.optim.scheduler.ReduceLROnPlateau` scheduler).
+        num_steps_per_epoch: Optimization steps per epoch.
+    """
+    if optim is None:
+        optim = Adam(loss.parameters())
+    if scheduler is None and scheduler != "none":
+        scheduler = ReduceLROnPlateau(optim, verbose=True)
+    if progress is True:
+        progress = tqdm(total=num_epochs)
+
+    values = {}
+    previous_entropy = None
+    while True:
+        # Run one epoch.
+        current_loss = 0
+        current_entropy = 0
+        for _ in range(num_steps_per_epoch):
+            optim.zero_grad()
+            loss_value: th.Tensor
+            entropy: th.Tensor
+            loss_value, entropy = loss(return_entropy=True)
+            loss_value.backward()
+            optim.step()
+
+            current_loss += loss_value.item()
+            current_entropy += entropy.item()
+
+        current_loss /= num_steps_per_epoch
+        values.setdefault("losses", []).append(current_loss)
+        current_entropy /= num_steps_per_epoch
+        values.setdefault("entropies", []).append(current_entropy)
+
+        if progress is not None:
+            progress.update()
+            progress.set_description(f"loss = {loss_value:.3e}")
+
+        # Determine whether we've reached the maximum number of epochs.
+        if num_epochs and len(values["losses"]) == num_epochs:
+            break
+
+        # Evaluate convergence based on entropy of the distribution.
+        if previous_entropy is not None \
+                and np.isclose(previous_entropy, current_entropy, rtol=rtol, atol=atol):
+            break
+        previous_entropy = current_entropy
+
+        # Update the learning rate.
+        scheduler.step(current_loss)
+
+    return values
