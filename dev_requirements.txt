@@ -4,6 +4,8 @@
 #
 #    pip-compile --output-file=dev_requirements.txt dev_requirements.in
 #
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 -e file:
     # via -r test_requirements.txt
 alabaster==0.7.12
