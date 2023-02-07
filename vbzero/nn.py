@@ -1,8 +1,13 @@
+"""
+nn
+==
+"""
+
 import torch as th
 from torch.distributions import Distribution, Transform, TransformedDistribution, transform_to
 from torch.distributions.constraints import Constraint
 from torch.nn import Module, ModuleDict, Parameter, ParameterDict
-from typing import Any, Callable, Mapping, Optional, Type
+from typing import Any, Callable, Mapping, Optional, Tuple, Type
 from .approximation import DistributionDict
 from .util import condition, maybe_aggregate, LogProb
 
@@ -41,7 +46,10 @@ class ParametrizedDistribution(Module):
                 self.parameter_transforms[key] = transform
         self.unconstrained = ParameterDict(unconstrained)
 
-    def forward(self) -> Type[Distribution]:
+    def forward(self) -> Distribution:
+        """
+        Evaluate a trainable distribution.
+        """
         # Transform unconstrained parameters to the constrained space and add constant parameters.
         kwargs = {key: self.parameter_transforms[key](value) for key, value in
                   self.unconstrained.items()}
@@ -57,13 +65,23 @@ class ParameterizedDistributionDict(ModuleDict):
     """
     Dictionary of parameterized distributions.
     """
-    def forward(self) -> dict[str, Distribution]:
+    def forward(self) -> DistributionDict:
+        """
+        Evaluate a trainable dictionary of distributions.
+        """
         return DistributionDict({
             name: parameterized_distribution() for name, parameterized_distribution in self.items()
         })
 
 
 class VariationalLoss(Module):
+    """
+    Variational loss function.
+
+    Args:
+        model: Model declaration as a function.
+        approximation: Model to evaluate the variational approximation.
+    """
     def __init__(self, model: Callable, approximation: Module) -> None:
         super().__init__()
         self.model = model
@@ -71,7 +89,10 @@ class VariationalLoss(Module):
             approximation = ParameterizedDistributionDict(approximation)
         self.approximation = approximation
 
-    def forward(self, *args, **kwargs) -> th.Tensor:
+    def forward(self, *args, **kwargs) -> Tuple[th.Tensor, th.Tensor]:
+        """
+        Evaluate the evidence lower bound and entropy of the variational distribution.
+        """
         # Evaluate a stochastic estimate of the expected log joint and add the entropy.
         dist: Distribution = self.approximation()
         sample = dist.rsample()

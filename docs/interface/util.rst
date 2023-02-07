@@ -1,0 +1,2 @@
+.. automodule:: vbzero.util
+    :members:

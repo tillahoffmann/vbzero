@@ -1,4 +1,9 @@
-from collections.abc import MutableMapping
+"""
+util
+====
+"""
+
+from collections.abc import Mapping, MutableMapping
 import functools as ft
 from numbers import Integral
 import numpy as np
@@ -11,9 +16,16 @@ from tqdm import tqdm
 from typing import Any, Callable, Optional, Union, Type
 
 
-def normalize_shape(shape: Optional[th.Size]) -> th.Size:
+def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
     """
     Normalize a sample shape akin to numpy.
+
+    Args:
+        shape: Possibly unnormalized shape, e.g., an integer sample size, or :code:`None` to
+            indicate single samples.
+
+    Returns:
+        Normalized shape as a tuple or :class:`torch.Size`.
     """
     if shape is None:
         return ()
@@ -24,9 +36,18 @@ def normalize_shape(shape: Optional[th.Size]) -> th.Size:
 
 class SingletonContextMixin:
     """
-    Baseclass for singleton contexts. Inheriting classes must override :meth:`sample`
+    Baseclass for singleton contexts. Inheriting classes must override :meth:`sample` which handles
+    drawing of random variables for the context. The class-level :attr:`ORDER` attribute determines
+    the default application order of :meth:`sample` statements in relation to other contexts.
+
+    Args:
+        order: Application order of the context (defaults to :attr:`ORDER`).
     """
     INSTANCE: "SingletonContextMixin" = None
+    ORDER: Integral = 0
+
+    def __init__(self, order: Optional[Integral] = None) -> None:
+        self.order = self.ORDER if order is None else order
 
     def __enter__(self):
         cls = self.__class__
@@ -40,24 +61,39 @@ class SingletonContextMixin:
         self.__class__.INSTANCE = None
 
     @classmethod
-    def get_instance(cls, *args, **kwargs):
-        return cls.INSTANCE if cls.is_active() else cls(*args, **kwargs)
+    def get_instance(cls, *args, strict: bool = True, **kwargs) -> "SingletonContextMixin":
+        """
+        Get the active context instance or create a new one if :code:`strict` is false-y.
+
+        Args:
+            *args: Positional arguments passed to the constructor.
+            strict: Enforce that a context is active instead of returning a new instance.
+            **kwargs: Keyword arguments passed to the constructor.
+        """
+        if cls.is_active():
+            return cls.INSTANCE
+        if strict:
+            raise RuntimeError(f"{cls} context is not active")
+        return cls(*args, **kwargs)
 
     @classmethod
-    def is_active(cls):
+    def is_active(cls) -> bool:
+        """
+        Return whether the context is active.
+        """
         return cls.INSTANCE is not None
 
     def _evaluate_distribution(self, dist_cls: Union[Distribution, Type[Distribution]], *args,
                                sample_shape: Optional[th.Size] = None, **kwargs) -> Distribution:
+        """
+        Helper function to obtain a distribution instance for deferred evaluation.
+        See :func:`sample` for details.
+        """
         distribution = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
         # Try to automatically infer the batch shape if not given.
         sample_shape = distribution.batch_shape if sample_shape is None else \
             normalize_shape(sample_shape)
         return distribution.expand(sample_shape)
-
-    def validate(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-                 sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
-        pass
 
     def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
                sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
@@ -69,8 +105,13 @@ class State(SingletonContextMixin, dict):
     Dictionary-like context for managing the state of a model invocation. Values can only be set
     once to ensure consistent state for each model invocation.
     """
-    # Use `MutableMapping`'s implementation in terms of __setitem__ which we have overridden.
-    update = MutableMapping.update
+    # We want State sampling statements to be executed at an intermediate level because they modify
+    # the state. We may want to use other contexts before or after the state is modified.
+    ORDER = 100
+
+    def __init__(self, *args, order: Optional[Integral] = None, **kwargs) -> None:
+        super().__init__(order)
+        dict.__init__(self, *args, **kwargs)
 
     def __setitem__(self, key: str, value: th.Tensor) -> None:
         if key in self:
@@ -79,6 +120,9 @@ class State(SingletonContextMixin, dict):
 
     def __delitem__(self, key: str) -> None:
         raise KeyError(f"keys cannot be removed; attempted {key}")
+
+    def update(self, value: Mapping, **kwargs) -> None:
+        return MutableMapping.update(self, value, **kwargs)
 
     def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
                sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
@@ -90,10 +134,23 @@ class State(SingletonContextMixin, dict):
 
 class LogProb(SingletonContextMixin, dict):
     """
-    Context for storing log probabilities.
+    Context for evaluating and storing log probabilities.
     """
+    # We want to evaluate log probabilities before any variables might be sampled by the State and
+    # give it a low ORDER.
+    ORDER = 0
+
+    def __init__(self, *args, order: Optional[Integral] = None, **kwargs) -> None:
+        super().__init__(order)
+        dict.__init__(self, *args, **kwargs)
+
     def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
                sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+        if name in self:
+            raise RuntimeError(f"log probability has already been evaluated for variable {name}")
+        # We need all variables to be present to evaluate the log probability.
+        if name not in State.INSTANCE:
+            raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
         x = State.INSTANCE[name]
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
         expected_shape = dist.batch_shape + dist.event_shape
@@ -102,29 +159,11 @@ class LogProb(SingletonContextMixin, dict):
                              f"{x.shape}")
         self[name] = dist.log_prob(x)
 
-    def validate(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-                 sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
-        if name in self:
-            raise RuntimeError(f"log probability has already been evaluated for variable {name}")
-        # We need all variables to be present to evaluate the log probability.
-        if name not in State.INSTANCE:
-            raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
-
-
-def hyperparam(name: str) -> Any:
-    """
-    Get a hyperparameter.
-    """
-    if not State.is_active():
-        raise RuntimeError("state context is not active; decorate your model with @model or create "
-                           "an explicit state")
-    return State.INSTANCE[name]
-
 
 def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
            sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
     """
-    Sample a value from a distribution or evaluate its log probability under the distribution.
+    Sample a value from a distribution.
 
     Args:
         name: Name of the variable to sample.
@@ -133,30 +172,49 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
         *args: Positional arguments passed to :code:`dist_cls` if it is not a distribution.
         **kwargs: Keyword arguments passed to :code:`dist_cls` if it is not a distribution.
         sample_shape: Shape of the sample to draw.
-        context: Stochastic context for sampling or log probability evaluation. If :code:`context`
-            is not given, random variables are drawn without reference to any state.
+
+    Returns:
+        Value of the sampled variable.
     """
+    if name == "order":
+        raise ValueError("`order` is a reserved name; choose another")
     # State is special. We ensure it's there every time.
-    if not State.is_active():
-        raise RuntimeError("state context is not active; decorate your model with @model or create "
-                           "an explicit state")
+    state = State.get_instance(strict=True)
     # First validate the state for all active contexts and then apply them.
     contexts = [cls.INSTANCE for cls in SingletonContextMixin.__subclasses__() if cls.is_active()]
-    for context in contexts:
-        context.validate(name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
-    for cls in contexts:
+    for cls in sorted(contexts, key=lambda context: context.order):
         cls.INSTANCE.sample(name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
     # Return the variable value.
-    return State.INSTANCE[name]
+    return state[name]
+
+
+def hyperparam(name: str) -> Any:
+    """
+    Get a hyperparameter by name.
+
+    Args:
+        name: Name of the hyperparameter.
+
+    Returns:
+        Value of the hyperparameter.
+    """
+    return State.get_instance()[name]
 
 
 def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Callable:
     """
     Condition a model with the given values.
+
+    Args:
+        values: Mapping of values to condition on.
+        **kwargs: Mapping of values to condition on as keyword arguments.
+
+    Returns:
+        Model conditioned on the provided values.
     """
     @ft.wraps(func)
     def _wrapper(*args, **kwargs) -> Any:
-        with State.get_instance() as state:
+        with State.get_instance(strict=False) as state:
             if values:
                 state.update(values)
             state.update(kwvalues)
@@ -166,7 +224,14 @@ def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Call
 
 def maybe_aggregate(value: dict[str, th.Tensor], aggregate: bool) -> Any:
     """
-    Aggregate the values of a dictionary.
+    Maybe aggregate the values of a dictionary.
+
+    Args:
+        value: Mapping whose values are tensors.
+        aggregate: Aggregate the tensors.
+
+    Returns:
+        Aggregated tensors if :code:`aggregate` is truth-y or the input value.
     """
     if aggregate:
         return sum(x.sum() for x in value.values())
@@ -243,14 +308,15 @@ def model(func: Optional[Callable] = None, *, return_state: bool = False) -> Cal
     Handle state for a callable model.
 
     Args:
-        return_state: Return the state of the decorated model.
+        return_state: Return the state of the decorated model on invocation.
 
-    Returns: Model with state handling.
+    Returns:
+        Model with state handling.
     """
     if func:  # Directly wrap the callable.
         @ft.wraps(func)
         def _wrapper(*args, **kwargs) -> Any:
-            with State.get_instance() as state:
+            with State.get_instance(strict=False) as state:
                 result = func(*args, **kwargs)
             if return_state:
                 return state if result is None else (result, state)
