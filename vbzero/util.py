@@ -24,9 +24,9 @@ def normalize_shape(shape: Optional[th.Size]) -> th.Size:
 
 class SingletonContextMixin:
     """
-    Baseclass for singleton contexts.
+    Baseclass for singleton contexts. Inheriting classes must override :meth:`sample`
     """
-    INSTANCE = None
+    INSTANCE: "SingletonContextMixin" = None
 
     def __enter__(self):
         cls = self.__class__
@@ -54,6 +54,10 @@ class SingletonContextMixin:
         sample_shape = distribution.batch_shape if sample_shape is None else \
             normalize_shape(sample_shape)
         return distribution.expand(sample_shape)
+
+    def validate(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
+                 sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+        pass
 
     def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
                sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
@@ -90,16 +94,21 @@ class LogProb(SingletonContextMixin, dict):
     """
     def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
                sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
-        if name in LogProb.INSTANCE:
-            raise RuntimeError(f"log probability has already been evaluated for variable {name}")
-        if (x := State.INSTANCE.get(name)) is None:
-            raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
+        x = State.INSTANCE[name]
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
         expected_shape = dist.batch_shape + dist.event_shape
         if expected_shape != x.shape:
             raise ValueError(f"expected shape {expected_shape} for variable {name} but got "
                              f"{x.shape}")
         self[name] = dist.log_prob(x)
+
+    def validate(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
+                 sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+        if name in self:
+            raise RuntimeError(f"log probability has already been evaluated for variable {name}")
+        # We need all variables to be present to evaluate the log probability.
+        if name not in State.INSTANCE:
+            raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
 
 
 def hyperparam(name: str) -> Any:
@@ -127,14 +136,16 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
         context: Stochastic context for sampling or log probability evaluation. If :code:`context`
             is not given, random variables are drawn without reference to any state.
     """
-    # We always need to have state.
+    # State is special. We ensure it's there every time.
     if not State.is_active():
         raise RuntimeError("state context is not active; decorate your model with @model or create "
                            "an explicit state")
-    # Apply all the contexts.
-    for cls in SingletonContextMixin.__subclasses__():
-        if cls.is_active():
-            cls.INSTANCE.sample(name, dist_cls, *args, sample_shape=sample_shape, **kwargs)
+    # First validate the state for all active contexts and then apply them.
+    contexts = [cls.INSTANCE for cls in SingletonContextMixin.__subclasses__() if cls.is_active()]
+    for context in contexts:
+        context.validate(name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
+    for cls in contexts:
+        cls.INSTANCE.sample(name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
     # Return the variable value.
     return State.INSTANCE[name]
 
