@@ -13,7 +13,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Callable, Optional, Union, Type
+from typing import Any, Callable, Iterable, Optional, Union, Type
 
 
 def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
@@ -113,6 +113,11 @@ class State(SingletonContextMixin, dict):
         super().__init__(order)
         dict.__init__(self, *args, **kwargs)
 
+    def __getitem__(self, name: Union[str, Iterable[str]]) -> th.Tensor:
+        if isinstance(name, str):
+            return dict.__getitem__(self, name)
+        return {key: dict.__getitem__(self, key) for key in name}
+
     def __setitem__(self, key: str, value: th.Tensor) -> None:
         if key in self:
             raise KeyError(f"key {key} has already been set")
@@ -188,7 +193,7 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     return state[name]
 
 
-def hyperparam(name: str) -> Any:
+def hyperparam(name: str, *names: str) -> Any:
     """
     Get a hyperparameter by name.
 
@@ -198,15 +203,20 @@ def hyperparam(name: str) -> Any:
     Returns:
         Value of the hyperparameter.
     """
-    return State.get_instance()[name]
+    state = State.get_instance()
+    if names:
+        values = [name]
+        values.extend(state[name] for name in names)
+        return names
+    return state[name]
 
 
-def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Callable:
+def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Callable:
     """
     Condition a model with the given values.
 
     Args:
-        values: Mapping of values to condition on.
+        *values: Mappings of values to condition on.
         **kwargs: Mapping of values to condition on as keyword arguments.
 
     Returns:
@@ -215,8 +225,8 @@ def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Call
     @ft.wraps(func)
     def _wrapper(*args, **kwargs) -> Any:
         with State.get_instance(strict=False) as state:
-            if values:
-                state.update(values)
+            for value in values:
+                state.update(value)
             state.update(kwvalues)
             return func(*args, **kwargs)
     return _wrapper

@@ -24,21 +24,21 @@ from vbzero.util import model, sample
 
 
 @model(return_state=True)
-def poisson_regression():
-    # We can also define n and k as hyperparameters or pass them in as arguments. But let's define
-    # them here for simplicity.
-    n = 100
-    k = 3
+def poisson_regression(n=100, k=3):
     z = sample("z", th.distributions.Categorical(logits=th.zeros(k)), sample_shape=n)
     x = sample("x", th.distributions.Normal(0, 1), sample_shape=n)
-    intercepts = sample("intercepts", th.distributions.Normal(0, 3), sample_shape=k)
+    # We use slightly larger intercepts in the generative model to get more signal.
+    intercepts = sample("intercepts", th.distributions.Normal(2, 3), sample_shape=k)
     slope = sample("slope", th.distributions.Normal(0, 1))
-    log_rate = intercepts[z] + slope * x
+    # The ... notation ensures we can pass in batches of samples for posterior predictive 
+    # replication.
+    log_rate = intercepts[..., z] + slope[..., None] * x
     y = sample("y", th.distributions.Poisson(log_rate.exp()))
 
 
 th.manual_seed(4)  # For reproducibility.
 state = poisson_regression()
+
 
 def plot_state(state):
     fig, ax = plt.subplots()
@@ -81,7 +81,7 @@ from vbzero.nn import VariationalLoss
 from vbzero.util import condition
 
 
-conditioned = condition(poisson_regression, x=state["x"], y=state["y"], z=state["z"])
+conditioned = condition(poisson_regression, state["x", "y", "z"])
 loss = VariationalLoss(conditioned, approximation)
 loss()
 ```
@@ -116,5 +116,22 @@ for i, ax in enumerate(axes.ravel()[1:]):
     ax.hist(samples["intercepts"][:, i].numpy())
     ax.axvline(state["intercepts"][i], color="k", ls="--")
     ax.set_xlabel(f"intercept $b_{i + 1}$")
+fig.tight_layout()
+```
+
+Let's check our model using posterior predictive replication.
+
+```{code-cell} ipython3
+replicates = condition(poisson_regression, state["x", "z"], samples)()
+fig, ax = plt.subplots()
+l, m, u = replicates["y"].quantile(th.as_tensor([0.05, 0.5, 0.95]), axis=0).numpy()
+ax.errorbar(state["y"], m, (m - l, u - m), ls="none", marker=".")
+lims = state["y"].min(), state["y"].max()
+ax.plot(lims, lims, color="k", ls="--")
+ax.set_xscale("log")
+ax.set_yscale("log")
+ax.set_aspect("equal")
+ax.set_xlabel("data $y$")
+ax.set_ylabel(r"replicates $\tilde y$")
 fig.tight_layout()
 ```
