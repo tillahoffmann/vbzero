@@ -7,6 +7,7 @@
 .. toctree::
   :hidden:
 
+  docs/interface/interface
   docs/examples/poisson_regression
 
 vbzero is a minimal stochastic variational inference framework for `torch <https://pytorch.org>`__ with an interface similar to `pyro <https://pyro.ai>`__.

@@ -16,7 +16,7 @@ def model(x) -> None:
 
 def test_model_decorator() -> None:
     # Check that the model fails without state.
-    with pytest.raises(RuntimeError, match="state context is not active"):
+    with pytest.raises(RuntimeError, match="context is not active"):
         model(5)
 
     # Use explicit state.
