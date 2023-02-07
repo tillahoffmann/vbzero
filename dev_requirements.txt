@@ -122,6 +122,8 @@ fonttools==4.38.0
     # via
     #   -r test_requirements.txt
     #   matplotlib
+greenlet==2.0.2
+    # via -r test_requirements.txt
 idna==3.3
     # via
     #   -r test_requirements.txt

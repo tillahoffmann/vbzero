@@ -64,6 +64,8 @@ flake8==4.0.1
     # via vbzero
 fonttools==4.38.0
     # via matplotlib
+greenlet==2.0.2
+    # via -r test_requirements.in
 idna==3.3
     # via requests
 imagesize==1.2.0
