@@ -4,46 +4,6 @@ from typing import Any, Optional
 from .util import maybe_aggregate, normalize_shape
 
 
-class Approximation(Distribution):
-    def entropy(self, aggregate: bool = False) -> Any:
-        """
-        Evaluate the entropy of the approximation.
-
-        Args:
-            aggregate: Sum the entropies of all variables.
-
-        Returns: Entropy tensor if :code:`aggregate` else a dictionary of entropy tensors keyed by
-            variable name.
-        """
-        raise NotImplementedError
-
-    def log_prob(self, value: dict, aggregate: bool = False) -> Any:
-        """
-        Evaluate the log probability of all variables.
-
-        Args:
-            value: Dictionary of values keyed by variable name.
-            aggregate: Sum the log probabilities of all variables.
-
-        Returns: Log probability tensor if :code:`aggregate` else a dictionary of log probability
-            tensors keyed by variable name.
-        """
-        raise NotImplementedError
-
-    def rsample(self, sample_shape: Optional[th.Size] = None, value: Optional[dict] = None) -> dict:
-        """
-        Draw a sample from the approximate distribution.
-
-        Args:
-            sample_shape: Sample batch shape.
-            value: Dictionary of variables to treat as fixed, e.g., hyperparameters or pinned
-                variables for debugging.
-
-        Returns: Dictionary of samples keyed by variable name.
-        """
-        raise NotImplementedError
-
-
 class DistributionDict(Distribution):
     """
     Mean-field approximation.
