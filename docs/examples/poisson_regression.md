@@ -28,7 +28,7 @@ def poisson_regression():
     x = sample("x", th.distributions.Normal(0, 1), sample_shape=n)
     intercept, slope = sample("theta", th.distributions.Normal(0, 1), sample_shape=2)
     log_rate = intercept + slope * x
-    y = sample("y", th.distributions.Poisson(log_rate.exp()))
+    y = sample("y", th.distributions.Poisson(log_rate.exp()), sample_shape=n)
     
 
 th.manual_seed(4)  # For reproducibility.

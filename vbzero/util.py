@@ -47,6 +47,15 @@ class SingletonContextMixin:
     def is_active(cls):
         return cls.INSTANCE is not None
 
+    def _evaluate_distribution(self, dist_cls: Union[Distribution, Type[Distribution]], *args,
+                               sample_shape: Optional[th.Size] = None, **kwargs) -> Distribution:
+        distribution = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
+        return distribution.expand(normalize_shape(sample_shape))
+
+    def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
+               sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+        raise NotImplementedError
+
 
 class State(SingletonContextMixin, dict):
     """
@@ -64,11 +73,30 @@ class State(SingletonContextMixin, dict):
     def __delitem__(self, key: str) -> None:
         raise KeyError(f"keys cannot be removed; attempted {key}")
 
+    def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
+               sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+        if (x := self.get(name)) is not None:
+            return x
+        dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
+        self[name] = dist.sample()
+
 
 class LogProb(SingletonContextMixin, dict):
     """
     Context for storing log probabilities.
     """
+    def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
+               sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+        if name in LogProb.INSTANCE:
+            raise RuntimeError(f"log probability has already been evaluated for variable {name}")
+        if (x := State.INSTANCE.get(name)) is None:
+            raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
+        dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
+        expected_shape = dist.batch_shape + dist.event_shape
+        if expected_shape != x.shape:
+            raise ValueError(f"expected shape {expected_shape} for variable {name} but got "
+                             f"{x.shape}")
+        self[name] = dist.log_prob(x)
 
 
 def hyperparam(name: str) -> Any:
@@ -96,31 +124,16 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
         context: Stochastic context for sampling or log probability evaluation. If :code:`context`
             is not given, random variables are drawn without reference to any state.
     """
+    # We always need to have state.
     if not State.is_active():
         raise RuntimeError("state context is not active; decorate your model with @model or create "
                            "an explicit state")
-    sample_shape = normalize_shape(sample_shape)
-    x = State.INSTANCE.get(name)
-
-    if LogProb.is_active():
-        if name in LogProb.INSTANCE:
-            raise RuntimeError(f"log probability has already been evaluated for variable {name}")
-        if x is None:
-            raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
-        dist = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
-        expected_shape = sample_shape + dist.batch_shape + dist.event_shape
-        if expected_shape != x.shape:
-            raise ValueError(f"expected shape {expected_shape} for variable {name} but got "
-                             f"{x.shape}")
-        LogProb.INSTANCE[name] = dist.log_prob(x)
-    else:
-        if x is None:
-            dist = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
-            # We use sample rather than rsample here to generate samples from the model. This will
-            # stop any gradients so we cannot differentiate through any forward passes.
-            x = dist.sample(sample_shape)
-            State.INSTANCE[name] = x
-    return x
+    # Apply all the contexts.
+    for cls in SingletonContextMixin.__subclasses__():
+        if cls.is_active():
+            cls.INSTANCE.sample(name, dist_cls, *args, sample_shape=sample_shape, **kwargs)
+    # Return the variable value.
+    return State.INSTANCE[name]
 
 
 def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Callable:
