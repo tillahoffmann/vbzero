@@ -12,7 +12,6 @@ extensions = [
 ]
 project = "vbzero"
 exclude_patterns = ["playground", ".pytest_cache"]
-napoleon_custom_sections = [("Returns", "params_style")]
 plot_formats = [
     ("png", 144),
 ]
