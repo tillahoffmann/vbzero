@@ -188,7 +188,7 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     return state[name]
 
 
-def hyperparam(name: str) -> Any:
+def hyperparam(name: str, *names: str) -> Any:
     """
     Get a hyperparameter by name.
 
@@ -198,7 +198,12 @@ def hyperparam(name: str) -> Any:
     Returns:
         Value of the hyperparameter.
     """
-    return State.get_instance()[name]
+    state = State.get_instance()
+    if names:
+        values = [name]
+        values.extend(state[name] for name in names)
+        return names
+    return state[name]
 
 
 def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Callable:
