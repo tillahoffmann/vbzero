@@ -201,12 +201,12 @@ def hyperparam(name: str) -> Any:
     return State.get_instance()[name]
 
 
-def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Callable:
+def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Callable:
     """
     Condition a model with the given values.
 
     Args:
-        values: Mapping of values to condition on.
+        *values: Mappings of values to condition on.
         **kwargs: Mapping of values to condition on as keyword arguments.
 
     Returns:
@@ -215,8 +215,8 @@ def condition(func: Callable, values: Optional[dict] = None, **kwvalues) -> Call
     @ft.wraps(func)
     def _wrapper(*args, **kwargs) -> Any:
         with State.get_instance(strict=False) as state:
-            if values:
-                state.update(values)
+            for value in values:
+                state.update(value)
             state.update(kwvalues)
             return func(*args, **kwargs)
     return _wrapper
