@@ -129,8 +129,9 @@ dmypy.json
 .pyre/
 
 # Custom excludes
+.doit.db*
 .DS_Store
+*.ipynb
 .vscode
 playground/
 workspace/
-.doit.db*
