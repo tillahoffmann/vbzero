@@ -5,7 +5,7 @@ from typing import Any
 from vbzero import util
 
 
-def model(x) -> None:
+def model(x=5) -> None:
     y = util.sample("y", th.distributions.Normal(x, 1))
     z = util.sample("z", th.distributions.Normal(y, 1))
     return {
@@ -101,7 +101,8 @@ def test_log_prob_context_invalid() -> None:
         conditioned(x)
 
     # Check that missing values raise errors.
-    with pytest.raises(ValueError, match="variable y is missing"), util.LogProb():
+    with pytest.raises(ValueError, match="variable y is missing"), \
+            util.State.get_instance(strict=False), util.LogProb():
         util.model(model)(x)
 
     # Wrong shape.
@@ -130,3 +131,40 @@ def test_maybe_aggregate() -> None:
     values = {"x": th.arange(5), "y": th.as_tensor(5)}
     assert util.maybe_aggregate(values, False) is values
     assert util.maybe_aggregate(values, True) == 15
+
+
+def test_context_order():
+    class TestContext(util.ContextMixin):
+        def __init__(self) -> None:
+            super().__init__()
+            self.values = {}
+
+        def sample(self, name: str, *args, **kwargs) -> None:
+            self.values[name] = util.State.get_instance().get(name)
+
+    # If the state context is at the top of the stack, we expect variables to not yet be available
+    # because we run `sample` statements from the inside out.
+    with util.State(), TestContext() as inner:
+        model()
+
+    assert inner.values["y"] is None
+    assert inner.values["z"] is None
+
+    # If the state context is at the bottom of the stack, we expect variables to be available.
+    with TestContext() as outer, util.State():
+        model()
+    assert isinstance(outer.values["y"], th.Tensor)
+    assert isinstance(outer.values["z"], th.Tensor)
+
+
+def test_context_stack() -> None:
+    assert not util.ContextMixin.STACK
+    with util.State() as state:
+        assert state.counter == 1
+        assert util.ContextMixin.STACK == [state]
+        with state:
+            assert state.counter == 2
+            assert util.ContextMixin.STACK == [state]
+        assert state.counter == 1
+        assert util.ContextMixin.STACK == [state]
+    assert not util.ContextMixin.STACK

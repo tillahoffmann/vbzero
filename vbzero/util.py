@@ -13,7 +13,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Callable, Iterable, Optional, Union, Type
+from typing import Any, Callable, Iterable, List, Optional, Union, Type
 
 
 def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
@@ -34,7 +34,7 @@ def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size
     return th.Size(shape)
 
 
-class SingletonContextMixin:
+class ContextMixin:
     """
     Baseclass for singleton contexts. Inheriting classes must override :meth:`sample` which handles
     drawing of random variables for the context. The class-level :attr:`ORDER` attribute determines
@@ -43,45 +43,52 @@ class SingletonContextMixin:
     Args:
         order: Application order of the context (defaults to :attr:`ORDER`).
     """
-    INSTANCE: "SingletonContextMixin" = None
-    ORDER: Integral = 0
+    STACK: List["ContextMixin"] = []
 
-    def __init__(self, order: Optional[Integral] = None) -> None:
-        self.order = self.ORDER if order is None else order
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.counter = 0
 
     def __enter__(self):
+        # If the context is already active, we can just increase the counter.
+        if self.counter:
+            self.counter += 1
+            return self
+        # Ensure there is not another context of the same type.
         cls = self.__class__
-        # "Reentrant" context manager.
-        if cls.is_active() and cls.INSTANCE is not self:  # pragma: no cover
-            raise RuntimeError(f"a different {cls} context is already active")
-        cls.INSTANCE = self
+        if any(isinstance(context, cls) and context is not self for context in self.STACK):
+            breakpoint()
+            raise ValueError(f"an instance of {cls} is already active")
+        # Add the context to the stack.
+        self.STACK.append(self)
+        self.counter += 1
         return self
 
     def __exit__(self, *args):
-        self.__class__.INSTANCE = None
+        self.counter -= 1
+        # We're not ready to drop the context.
+        if self.counter:
+            return
+        if (other := self.STACK.pop()) is not self:
+            raise RuntimeError(f"the context stack is messed up; expected {self} but got {other}")
 
     @classmethod
-    def get_instance(cls, *args, strict: bool = True, **kwargs) -> "SingletonContextMixin":
+    def get_instance(cls, strict: bool = True) -> "ContextMixin":
         """
-        Get the active context instance or create a new one if :code:`strict` is false-y.
+        Get the active context instance or a new instance if :code:`strict` is false-y.
 
         Args:
-            *args: Positional arguments passed to the constructor.
-            strict: Enforce that a context is active instead of returning a new instance.
-            **kwargs: Keyword arguments passed to the constructor.
+            strict: Enforce that a context is active.
+
+        Returns:
+            Context instance.
         """
-        if cls.is_active():
-            return cls.INSTANCE
+        for context in cls.STACK:
+            if isinstance(context, cls):
+                return context
         if strict:
             raise RuntimeError(f"{cls} context is not active")
-        return cls(*args, **kwargs)
-
-    @classmethod
-    def is_active(cls) -> bool:
-        """
-        Return whether the context is active.
-        """
-        return cls.INSTANCE is not None
+        return cls()
 
     def _evaluate_distribution(self, dist_cls: Union[Distribution, Type[Distribution]], *args,
                                sample_shape: Optional[th.Size] = None, **kwargs) -> Distribution:
@@ -100,19 +107,11 @@ class SingletonContextMixin:
         raise NotImplementedError
 
 
-class State(SingletonContextMixin, dict):
+class State(ContextMixin, dict):
     """
     Dictionary-like context for managing the state of a model invocation. Values can only be set
     once to ensure consistent state for each model invocation.
     """
-    # We want State sampling statements to be executed at an intermediate level because they modify
-    # the state. We may want to use other contexts before or after the state is modified.
-    ORDER = 100
-
-    def __init__(self, *args, order: Optional[Integral] = None, **kwargs) -> None:
-        super().__init__(order)
-        dict.__init__(self, *args, **kwargs)
-
     def __getitem__(self, name: Union[str, Iterable[str]]) -> th.Tensor:
         if isinstance(name, str):
             return dict.__getitem__(self, name)
@@ -140,26 +139,17 @@ class State(SingletonContextMixin, dict):
         self[name] = dist.sample()
 
 
-class LogProb(SingletonContextMixin, dict):
+class LogProb(ContextMixin, dict):
     """
     Context for evaluating and storing log probabilities.
     """
-    # We want to evaluate log probabilities before any variables might be sampled by the State and
-    # give it a low ORDER.
-    ORDER = 0
-
-    def __init__(self, *args, order: Optional[Integral] = None, **kwargs) -> None:
-        super().__init__(order)
-        dict.__init__(self, *args, **kwargs)
-
     def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
                sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
         if name in self:
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         # We need all variables to be present to evaluate the log probability.
-        if name not in State.INSTANCE:
+        if (x := State.get_instance().get(name)) is None:
             raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
-        x = State.INSTANCE[name]
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
         expected_shape = dist.batch_shape + dist.event_shape
         if expected_shape != x.shape:
@@ -184,14 +174,11 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     Returns:
         Value of the sampled variable.
     """
-    if name == "order":  # pragma: no cover
-        raise ValueError("`order` is a reserved name; choose another")
     # State is special. We ensure it's there every time.
     state = State.get_instance(strict=True)
     # First validate the state for all active contexts and then apply them.
-    contexts = [cls.INSTANCE for cls in SingletonContextMixin.__subclasses__() if cls.is_active()]
-    for cls in sorted(contexts, key=lambda context: context.order):
-        cls.INSTANCE.sample(name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
+    for context in reversed(ContextMixin.STACK):
+        context.sample(name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
     # Return the variable value.
     return state[name]
 
