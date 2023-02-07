@@ -13,7 +13,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Callable, Optional, Union, Type
+from typing import Any, Callable, Iterable, Optional, Union, Type
 
 
 def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
@@ -112,6 +112,11 @@ class State(SingletonContextMixin, dict):
     def __init__(self, *args, order: Optional[Integral] = None, **kwargs) -> None:
         super().__init__(order)
         dict.__init__(self, *args, **kwargs)
+
+    def __getitem__(self, name: Union[str, Iterable[str]]) -> th.Tensor:
+        if isinstance(name, str):
+            return dict.__getitem__(self, name)
+        return {key: dict.__getitem__(self, key) for key in name}
 
     def __setitem__(self, key: str, value: th.Tensor) -> None:
         if key in self:
