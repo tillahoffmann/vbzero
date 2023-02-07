@@ -226,7 +226,7 @@ def model(func: Optional[Callable] = None, *, return_state: bool = False) -> Cal
             with State.get_instance() as state:
                 result = func(*args, **kwargs)
             if return_state:
-                return result if result is None else (result, state)
+                return state if result is None else (result, state)
             return result
         return _wrapper
     else:  # Apply keyword arguments.
