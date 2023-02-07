@@ -8,52 +8,164 @@
     # via -r test_requirements.in
 alabaster==0.7.12
     # via sphinx
+appnope==0.1.3
+    # via
+    #   ipykernel
+    #   ipython
+asttokens==2.2.1
+    # via stack-data
 attrs==21.2.0
-    # via pytest
+    # via
+    #   jsonschema
+    #   jupyter-cache
+    #   pytest
 babel==2.9.1
     # via sphinx
+backcall==0.2.0
+    # via ipython
 certifi==2021.10.8
     # via requests
 charset-normalizer==2.0.7
     # via requests
+click==8.1.3
+    # via jupyter-cache
 cloudpickle==2.1.0
     # via doit
 colorama==0.4.5
     # via doit-interface
+comm==0.1.2
+    # via ipykernel
+contourpy==1.0.7
+    # via matplotlib
 coverage[toml]==6.0.2
     # via pytest-cov
+cycler==0.11.0
+    # via matplotlib
+debugpy==1.6.6
+    # via ipykernel
+decorator==5.1.1
+    # via ipython
 docutils==0.17.1
     # via
+    #   myst-parser
     #   sphinx
     #   sphinx-rtd-theme
 doit==0.36.0
     # via doit-interface
 doit-interface==0.1.6
     # via vbzero
+executing==1.2.0
+    # via stack-data
+fastjsonschema==2.16.2
+    # via nbformat
 flake8==4.0.1
     # via vbzero
+fonttools==4.38.0
+    # via matplotlib
 idna==3.3
     # via requests
 imagesize==1.2.0
     # via sphinx
 importlib-metadata==4.12.0
-    # via doit
+    # via
+    #   doit
+    #   jupyter-cache
+    #   myst-nb
 iniconfig==1.1.1
     # via pytest
+ipykernel==6.21.1
+    # via myst-nb
+ipython==8.9.0
+    # via
+    #   ipykernel
+    #   myst-nb
+jedi==0.18.2
+    # via ipython
 jinja2==3.0.2
-    # via sphinx
+    # via
+    #   myst-parser
+    #   sphinx
+jsonschema==4.17.3
+    # via nbformat
+jupyter-cache==0.5.0
+    # via myst-nb
+jupyter-client==8.0.2
+    # via
+    #   ipykernel
+    #   nbclient
+jupyter-core==5.2.0
+    # via
+    #   ipykernel
+    #   jupyter-client
+    #   nbformat
+kiwisolver==1.4.4
+    # via matplotlib
+markdown-it-py==2.1.0
+    # via
+    #   mdit-py-plugins
+    #   myst-parser
 markupsafe==2.0.1
     # via jinja2
+matplotlib==3.6.3
+    # via vbzero
+matplotlib-inline==0.1.6
+    # via
+    #   ipykernel
+    #   ipython
 mccabe==0.6.1
     # via flake8
-numpy==1.24.2
+mdit-py-plugins==0.3.3
+    # via myst-parser
+mdurl==0.1.2
+    # via markdown-it-py
+myst-nb==0.17.1
     # via vbzero
+myst-parser==0.18.1
+    # via myst-nb
+nbclient==0.5.13
+    # via
+    #   jupyter-cache
+    #   myst-nb
+nbformat==5.7.3
+    # via
+    #   jupyter-cache
+    #   myst-nb
+    #   nbclient
+nest-asyncio==1.5.6
+    # via
+    #   ipykernel
+    #   nbclient
+numpy==1.24.2
+    # via
+    #   contourpy
+    #   matplotlib
+    #   vbzero
 packaging==21.0
     # via
+    #   ipykernel
+    #   matplotlib
     #   pytest
     #   sphinx
+parso==0.8.3
+    # via jedi
+pexpect==4.8.0
+    # via ipython
+pickleshare==0.7.5
+    # via ipython
+pillow==9.4.0
+    # via matplotlib
+platformdirs==3.0.0
+    # via jupyter-core
 pluggy==1.0.0
     # via pytest
+prompt-toolkit==3.0.36
+    # via ipython
+psutil==5.9.4
+    # via ipykernel
+ptyprocess==0.7.0
+    # via pexpect
+pure-eval==0.2.2
+    # via stack-data
 py==1.10.0
     # via pytest
 pycodestyle==2.8.0
@@ -61,23 +173,46 @@ pycodestyle==2.8.0
 pyflakes==2.4.0
     # via flake8
 pygments==2.10.0
-    # via sphinx
+    # via
+    #   ipython
+    #   sphinx
 pyparsing==2.4.7
-    # via packaging
+    # via
+    #   matplotlib
+    #   packaging
+pyrsistent==0.19.3
+    # via jsonschema
 pytest==6.2.5
     # via
     #   pytest-cov
     #   vbzero
 pytest-cov==3.0.0
     # via vbzero
+python-dateutil==2.8.2
+    # via
+    #   jupyter-client
+    #   matplotlib
 pytz==2021.3
     # via babel
+pyyaml==6.0
+    # via
+    #   jupyter-cache
+    #   myst-nb
+    #   myst-parser
+pyzmq==25.0.0
+    # via
+    #   ipykernel
+    #   jupyter-client
 requests==2.26.0
     # via sphinx
+six==1.16.0
+    # via python-dateutil
 snowballstemmer==2.1.0
     # via sphinx
 sphinx==4.2.0
     # via
+    #   myst-nb
+    #   myst-parser
     #   sphinx-rtd-theme
     #   vbzero
 sphinx-rtd-theme==1.1.1
@@ -94,18 +229,43 @@ sphinxcontrib-qthelp==1.0.3
     # via sphinx
 sphinxcontrib-serializinghtml==1.1.5
     # via sphinx
+sqlalchemy==1.4.46
+    # via jupyter-cache
+stack-data==0.6.2
+    # via ipython
+tabulate==0.9.0
+    # via jupyter-cache
 toml==0.10.2
     # via pytest
 tomli==1.2.1
     # via coverage
 torch==1.13.1
     # via vbzero
+tornado==6.2
+    # via
+    #   ipykernel
+    #   jupyter-client
 tqdm==4.64.1
     # via vbzero
+traitlets==5.9.0
+    # via
+    #   comm
+    #   ipykernel
+    #   ipython
+    #   jupyter-client
+    #   jupyter-core
+    #   matplotlib-inline
+    #   nbclient
+    #   nbformat
 typing-extensions==4.4.0
-    # via torch
+    # via
+    #   myst-nb
+    #   myst-parser
+    #   torch
 urllib3==1.26.7
     # via requests
+wcwidth==0.2.6
+    # via prompt-toolkit
 zipp==3.8.1
     # via importlib-metadata
 

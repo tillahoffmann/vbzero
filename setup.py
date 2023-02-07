@@ -18,6 +18,8 @@ setup(
             "pytest-cov",
         ],
         "docs": [
+            "matplotlib",
+            "myst-nb",
             "sphinx",
             "sphinx_rtd_theme",
         ]

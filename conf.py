@@ -1,5 +1,6 @@
 master_doc = "README"
 extensions = [
+    "myst_nb",
     "sphinx.ext.doctest",
     "sphinx.ext.napoleon",
     "sphinx.ext.autodoc",
@@ -7,6 +8,7 @@ extensions = [
     "sphinx_rtd_theme",
 ]
 project = "vbzero"
+exclude_patterns = ["playground", ".pytest_cache"]
 napoleon_custom_sections = [("Returns", "params_style")]
 plot_formats = [
     ("png", 144),

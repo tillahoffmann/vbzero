@@ -4,6 +4,11 @@
 .. image:: https://github.com/tillahoffmann/vbzero/actions/workflows/main.yml/badge.svg
   :target: https://github.com/tillahoffmann/vbzero/actions/workflows/main.yml
 
+.. toctree::
+  :hidden:
+
+  docs/examples/poisson_regression
+
 vbzero is a minimal stochastic variational inference framework for `torch <https://pytorch.org>`__ with an interface similar to `pyro <https://pyro.ai>`__.
 
 Models are declared as python functions using :func:`vbzero.util.sample` statements. For example, the following snippet encodes the standard biased coin example.
