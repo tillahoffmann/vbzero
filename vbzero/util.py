@@ -50,7 +50,10 @@ class SingletonContextMixin:
     def _evaluate_distribution(self, dist_cls: Union[Distribution, Type[Distribution]], *args,
                                sample_shape: Optional[th.Size] = None, **kwargs) -> Distribution:
         distribution = dist_cls if isinstance(dist_cls, Distribution) else dist_cls(*args, **kwargs)
-        return distribution.expand(normalize_shape(sample_shape))
+        # Try to automatically infer the batch shape if not given.
+        sample_shape = distribution.batch_shape if sample_shape is None else \
+            normalize_shape(sample_shape)
+        return distribution.expand(sample_shape)
 
     def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
                sample_shape: Optional[th.Size] = None, **kwargs) -> Any:

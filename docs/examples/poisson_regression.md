@@ -14,9 +14,10 @@ kernelspec:
 
 # Poisson regression with vbzero
 
-We consider a univariate Poisson regression model for count data, and we will estimate two parameters: the intercept and slope of the Poisson rate on the log scale. Let's define the model, generate some data, and visualize it.
+We consider a univariate Poisson regression model for count data with random effects, and we will estimate two parameters: the intercepts (one for each group) and slope of the Poisson rate on the log scale. Let's define the model, generate some data, and visualize it.
 
 ```{code-cell} ipython3
+import matplotlib as mpl
 from matplotlib import pyplot as plt
 import torch as th
 from vbzero.util import model, sample
@@ -24,34 +25,51 @@ from vbzero.util import model, sample
 
 @model(return_state=True)
 def poisson_regression():
+    # We can also define n and k as hyperparameters or pass them in as arguments. But let's define
+    # them here for simplicity.
     n = 100
+    k = 3
+    z = sample("z", th.distributions.Categorical(logits=th.zeros(k)), sample_shape=n)
     x = sample("x", th.distributions.Normal(0, 1), sample_shape=n)
-    intercept, slope = sample("theta", th.distributions.Normal(0, 1), sample_shape=2)
-    log_rate = intercept + slope * x
-    y = sample("y", th.distributions.Poisson(log_rate.exp()), sample_shape=n)
-    
+    intercepts = sample("intercepts", th.distributions.Normal(0, 3), sample_shape=k)
+    slope = sample("slope", th.distributions.Normal(0, 1))
+    log_rate = intercepts[z] + slope * x
+    y = sample("y", th.distributions.Poisson(log_rate.exp()))
+
 
 th.manual_seed(4)  # For reproducibility.
 state = poisson_regression()
 
 def plot_state(state):
     fig, ax = plt.subplots()
-    ax.scatter(state["x"], state["y"])
+    cmap = mpl.cm.viridis
+    ax.scatter(state["x"], state["y"], c=state["intercepts"][state["z"]], cmap=cmap)
+
+    norm = mpl.colors.Normalize(state["intercepts"].min(), state["intercepts"].max())
+    mappable = mpl.cm.ScalarMappable(norm, cmap)
+    lin = th.linspace(state["x"].min(), state["x"].max(), 50)
+    for intercept in state["intercepts"]:
+        color = mappable.to_rgba(intercept)
+        ax.plot(lin, (intercept + state["slope"] * lin).exp(), color=color, ls="--")
     ax.set_yscale("log")
     ax.set_xlabel("covariate $x$")
     ax.set_ylabel("counts $y$")
     fig.tight_layout()
-    
+
 plot_state(state)
 ```
 
 Having declared the generative model, let's define a variational approximation for the parameters theta with random starting points. A {class}`vbzero.nn.ParameterizedDistribution` is an easy way to define a distribution whose parameters can be optimized. Calling the module returns a distribution, and we can draw samples from it.
 
 ```{code-cell} ipython3
-from vbzero.nn import ParametrizedDistribution
+from vbzero.nn import ParametrizedDistribution, ParameterizedDistributionDict
 
-approximation = ParametrizedDistribution(th.distributions.MultivariateNormal, loc=th.randn(2), 
-                                         scale_tril=th.eye(2))
+k, = state["intercepts"].size()
+approximation = ParameterizedDistributionDict({
+    "intercepts": ParametrizedDistribution(th.distributions.Normal, loc=th.randn(k),
+                                           scale=th.ones(k)),
+    "slope": ParametrizedDistribution(th.distributions.Normal, loc=th.randn([]), scale=1.0)
+})
 distribution = approximation()
 distribution.sample()
 ```
@@ -63,8 +81,8 @@ from vbzero.nn import VariationalLoss
 from vbzero.util import condition
 
 
-conditioned = condition(poisson_regression, x=state["x"], y=state["y"])
-loss = VariationalLoss(conditioned, {"theta": approximation})
+conditioned = condition(poisson_regression, x=state["x"], y=state["y"], z=state["z"])
+loss = VariationalLoss(conditioned, approximation)
 loss()
 ```
 
@@ -86,12 +104,17 @@ fig.tight_layout()
 Having optimized the variational approximation, we can compare posterior samples with the parameter values used to generate the data.
 
 ```{code-cell} ipython3
-distribution = approximation()
-fig, ax = plt.subplots()
-ax.scatter(*distribution.sample([200]).detach().T, marker=".", alpha=0.5, label="posterior samples")
-ax.scatter(*state["theta"], label="true value")
-ax.set_xlabel(r"intercept $\theta_1$")
-ax.set_ylabel(r"slope $\theta_2$")
-ax.legend()
+distributions = approximation()
+samples = distributions.sample(500)
+
+fig, axes = plt.subplots(2, 2)
+ax = axes[0, 0]
+ax.hist(samples["slope"].numpy())
+ax.axvline(state["slope"], color="k", ls="--")
+ax.set_xlabel(r"slope $\theta$")
+for i, ax in enumerate(axes.ravel()[1:]):
+    ax.hist(samples["intercepts"][:, i].numpy())
+    ax.axvline(state["intercepts"][i], color="k", ls="--")
+    ax.set_xlabel(f"intercept $b_{i + 1}$")
 fig.tight_layout()
 ```
