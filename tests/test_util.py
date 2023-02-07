@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import torch as th
+from typing import Any
 from vbzero import util
 
 
@@ -47,9 +48,21 @@ def test_model_decorator() -> None:
 
 
 def test_given_state() -> None:
-    with util.State(y=42):
+    with util.State(y=42, z=10) as state:
         result = model(-10)
     assert result["y"] == 42
+    assert state["y", "z"] == {"y": 42, "z": 10}
+
+
+def test_state_once() -> None:
+    state = util.State(a=1)
+    with pytest.raises(KeyError):
+        del state["a"]
+    with pytest.raises(KeyError):
+        state.pop("a")
+    with pytest.raises(KeyError):
+        state["a"] = 5
+    assert state["a"] == 1
 
 
 def test_condition() -> None:
@@ -76,3 +89,44 @@ def test_log_prob_context() -> None:
         util.condition(model, y=y, z=z)(x)
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(x, 1).log_prob(y))
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(y, 1).log_prob(z))
+
+
+def test_log_prob_context_invalid() -> None:
+    x = 17
+    # Check that re-evaluation fails.
+    conditioned = util.condition(model, y=th.as_tensor(19.), z=th.as_tensor(21.))
+    with util.LogProb() as log_prob:
+        conditioned(x)
+    with pytest.raises(RuntimeError, match="has already been evaluated"), log_prob:
+        conditioned(x)
+
+    # Check that missing values raise errors.
+    with pytest.raises(ValueError, match="variable y is missing"), util.LogProb():
+        util.model(model)(x)
+
+    # Wrong shape.
+    with pytest.raises(ValueError, match="expected shape"), util.LogProb():
+        util.condition(model, y=th.randn(17, 18))(x)
+
+
+@pytest.mark.parametrize("arg, expected", [
+    ((), th.Size([])),
+    (None, th.Size([])),
+    (15, th.Size([15])),
+    ((7, 8), th.Size([7, 8])),
+    ([9, 11], th.Size([9, 11])),
+])
+def test_normalize_shape(arg: Any, expected: th.Size) -> None:
+    assert util.normalize_shape(arg) == expected
+
+
+def test_hyperparam() -> None:
+    with util.State(x=1, y=2):
+        assert util.hyperparam("x", "y") == (1, 2)
+        assert util.hyperparam("x") == 1
+
+
+def test_maybe_aggregate() -> None:
+    values = {"x": th.arange(5), "y": th.as_tensor(5)}
+    assert util.maybe_aggregate(values, False) is values
+    assert util.maybe_aggregate(values, True) == 15

@@ -41,8 +41,12 @@ class ParametrizedDistribution(Module):
             if constraint is None or key in const:
                 self.const[key] = value
             else:
+                # Check that the constraint is satisfied before transforming.
+                value = th.as_tensor(value)
+                if not constraint.check(value).all():
+                    raise ValueError(f"parameter {key} does not satisfy {constraint}: {value}")
                 transform: Transform = transform_to(constraint)
-                unconstrained[key] = Parameter(transform.inv(th.as_tensor(value)))
+                unconstrained[key] = Parameter(transform.inv(value))
                 self.parameter_transforms[key] = transform
         self.unconstrained = ParameterDict(unconstrained)
 

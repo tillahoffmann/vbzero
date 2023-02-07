@@ -31,7 +31,7 @@ def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size
         return ()
     if isinstance(shape, Integral):
         return (shape,)
-    return shape
+    return th.Size(shape)
 
 
 class SingletonContextMixin:
@@ -52,7 +52,7 @@ class SingletonContextMixin:
     def __enter__(self):
         cls = self.__class__
         # "Reentrant" context manager.
-        if cls.is_active() and cls.INSTANCE is not self:
+        if cls.is_active() and cls.INSTANCE is not self:  # pragma: no cover
             raise RuntimeError(f"a different {cls} context is already active")
         cls.INSTANCE = self
         return self
@@ -126,6 +126,9 @@ class State(SingletonContextMixin, dict):
     def __delitem__(self, key: str) -> None:
         raise KeyError(f"keys cannot be removed; attempted {key}")
 
+    def pop(self, key: str, *args) -> None:
+        raise KeyError(f"keys cannot be removed; attempted {key}")
+
     def update(self, value: Mapping, **kwargs) -> None:
         return MutableMapping.update(self, value, **kwargs)
 
@@ -181,7 +184,7 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     Returns:
         Value of the sampled variable.
     """
-    if name == "order":
+    if name == "order":  # pragma: no cover
         raise ValueError("`order` is a reserved name; choose another")
     # State is special. We ensure it's there every time.
     state = State.get_instance(strict=True)
@@ -204,11 +207,12 @@ def hyperparam(name: str, *names: str) -> Any:
         Value of the hyperparameter.
     """
     state = State.get_instance()
+    value = state[name]
     if names:
-        values = [name]
+        values = [value]
         values.extend(state[name] for name in names)
-        return names
-    return state[name]
+        return tuple(values)
+    return value
 
 
 def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Callable:
