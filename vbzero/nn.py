@@ -2,7 +2,7 @@ import torch as th
 from torch.distributions import Distribution, Transform, TransformedDistribution, transform_to
 from torch.distributions.constraints import Constraint
 from torch.nn import Module, ModuleDict, Parameter, ParameterDict
-from typing import Any, Callable, Optional, Type
+from typing import Any, Callable, Mapping, Optional, Type
 from .approximation import DistributionDict
 from .util import condition, maybe_aggregate, LogProb
 
@@ -67,6 +67,8 @@ class VariationalLoss(Module):
     def __init__(self, model: Callable, approximation: Module) -> None:
         super().__init__()
         self.model = model
+        if isinstance(approximation, Mapping) and not isinstance(approximation, Module):
+            approximation = ParameterizedDistributionDict(approximation)
         self.approximation = approximation
 
     def forward(self, *args, **kwargs) -> th.Tensor:
