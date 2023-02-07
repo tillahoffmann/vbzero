@@ -24,7 +24,7 @@ jobs:
           cache: pip
           cache-dependency-path: test_requirements.txt
       - name: Install dependencies
-        run: pip install -r test_requirements.txt
+        run: pip install --no-dependencies -r test_requirements.txt
       - name: Run the tests
         run: doit tests
       - name: Lint the code
