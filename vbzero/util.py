@@ -13,7 +13,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Callable, Iterable, Optional, Union, Tuple, Type
+from typing import Any, Callable, Iterable, List, Optional, Union, Tuple, Type
 
 
 def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
@@ -34,52 +34,24 @@ def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size
     return th.Size(shape)
 
 
-class SingletonContextMixin:
-    """
-    Mixin for handling singletons that can act as contexts. The class-level :attr:`GROUP_KEY`
-    attribute determines the group an instance belongs to. Only one context of a given group can be
-    active.
-    """
-    INSTANCES: dict[str, SingletonContextMixin] = {}
-    GROUP_KEY = None
+class State(dict):
+    STACK: List[State] = []
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.counter = 0
-
-    def __enter__(self) -> SingletonContextMixin:
-        cls = self.__class__
-        if cls.GROUP_KEY is None:
-            raise ValueError("inheriting classes must override the GROUP_KEY attribute")
-        instance = cls.INSTANCES.get(self.GROUP_KEY)
-        if instance is None:
-            cls.INSTANCES[self.GROUP_KEY] = self
-        elif instance is not self:
-            raise RuntimeError(f"cannot activate {self}; group {self.GROUP_KEY} already has an "
-                               f"active context {instance}")
-        self.counter += 1
+    def __enter__(self) -> State:
+        self.STACK.append(self)
         return self
 
     def __exit__(self, *args) -> None:
-        self.counter -= 1
-        if not self.counter and (other := self.INSTANCES.pop(self.GROUP_KEY)) is not self:
-            raise ValueError(f"expected {self} but got {other}")
+        if (other := self.STACK.pop()) is not self:
+            raise RuntimeError(f"incosistent stack; expected {self} but got {other}")
 
     @classmethod
-    def get_instance(cls, strict: bool = True) -> SingletonContextMixin:
-        if (instance := cls.INSTANCES.get(cls.GROUP_KEY)) is not None:
-            return instance
+    def get_instance(cls, strict: bool = True) -> State:
+        if cls.STACK:
+            return cls.STACK[-1]
         if strict:
             raise RuntimeError(f"no active {cls}")
         return cls()
-
-    @classmethod
-    def is_active(cls) -> bool:
-        return cls.GROUP_KEY in cls.INSTANCES
-
-
-class State(SingletonContextMixin, dict):
-    GROUP_KEY = "state"
 
     def __getitem__(self, key: Union[Tuple[str], str]) -> Any:
         if isinstance(key, str):
@@ -98,8 +70,20 @@ class State(SingletonContextMixin, dict):
         return new
 
 
-class TraceMixin(SingletonContextMixin):
-    GROUP_KEY = "trace"
+class TraceMixin:
+    INSTANCE: Optional[TraceMixin] = None
+
+    def __enter__(self) -> State:
+        if TraceMixin.INSTANCE is not None:
+            raise RuntimeError(f"cannot activate {self} because {TraceMixin.INSTANCE} is active")
+        TraceMixin.INSTANCE = self
+        return TraceMixin.INSTANCE
+
+    def __exit__(self, *args) -> None:
+        if TraceMixin.INSTANCE is not self:
+            raise RuntimeError(f"inconsistent context; expected {self} but got "
+                               f"{TraceMixin.INSTANCE}")
+        TraceMixin.INSTANCE = None
 
     @staticmethod
     def _evaluate_distribution(dist_cls: Union[Distribution, Type[Distribution]], *args,
@@ -166,7 +150,7 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     Returns:
         Value of the sampled variable.
     """
-    trace = TraceMixin.get_instance() if TraceMixin.is_active() else Sample()
+    trace = Sample() if TraceMixin.INSTANCE is None else TraceMixin.INSTANCE
     state = State.get_instance()
     trace(state, name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
     return state[name]
@@ -201,7 +185,8 @@ def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Call
     """
     @ft.wraps(func)
     def _wrapper(*args, **kwargs) -> Any:
-        with State.get_instance(strict=False) as state:
+        # We make a copy of the state so we don't modify the original context.
+        with State.get_instance(strict=False).copy() as state:
             for value in values:
                 state.update(value)
             state.update(kwvalues)

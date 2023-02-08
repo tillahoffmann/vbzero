@@ -92,6 +92,7 @@ def test_log_prob_context() -> None:
     y = th.as_tensor(19.)
     z = th.as_tensor(21.)
     with util.LogProb() as log_prob:
+        assert util.TraceMixin.INSTANCE is log_prob
         util.condition(model, y=y, z=z)(x)
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(x, 1).log_prob(y))
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(y, 1).log_prob(z))
@@ -158,16 +159,13 @@ def test_context():
 
 
 def test_context_reentry() -> None:
-    assert not util.SingletonContextMixin.INSTANCES
+    assert not util.TraceMixin.INSTANCE
     with util.Sample() as sample:
-        assert sample.counter == 1
-        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
-        with sample:
-            assert sample.counter == 2
-            assert util.SingletonContextMixin.INSTANCES["trace"] is sample
-        assert sample.counter == 1
-        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
-    assert not util.SingletonContextMixin.INSTANCES
+        assert util.TraceMixin.INSTANCE is sample
+        with pytest.raises(RuntimeError), sample:
+            pass
+        assert util.TraceMixin.INSTANCE is sample
+    assert not util.TraceMixin.INSTANCE
 
 
 def test_context_uniqueness() -> None:
