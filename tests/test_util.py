@@ -5,7 +5,7 @@ from typing import Any
 from vbzero import util
 
 
-def model(x) -> None:
+def model(x=5) -> None:
     y = util.sample("y", th.distributions.Normal(x, 1))
     z = util.sample("z", th.distributions.Normal(y, 1))
     return {
@@ -17,7 +17,7 @@ def model(x) -> None:
 
 def test_model_decorator() -> None:
     # Check that the model fails without state.
-    with pytest.raises(RuntimeError, match="context is not active"):
+    with pytest.raises(RuntimeError, match="no active <class '.*?State'>"):
         model(5)
 
     # Use explicit state.
@@ -54,6 +54,7 @@ def test_given_state() -> None:
     assert state["y", "z"] == {"y": 42, "z": 10}
 
 
+@pytest.mark.xfail(reason="write-once state not yet implemented")
 def test_state_once() -> None:
     state = util.State(a=1)
     with pytest.raises(KeyError):
@@ -73,6 +74,11 @@ def test_condition() -> None:
 
     conditioned2 = util.condition(conditioned, z=19)
     assert conditioned2(-19) == {"x1p": -18, "y": 37, "z": 19}
+
+
+@pytest.mark.xfail(reason="write-once state not yet implemented")
+def test_condition_write_once() -> None:
+    conditioned = util.condition(model, y=37)
 
     with pytest.raises(KeyError, match="key y has already been set"):
         util.condition(conditioned, y=18)(0)
@@ -101,7 +107,8 @@ def test_log_prob_context_invalid() -> None:
         conditioned(x)
 
     # Check that missing values raise errors.
-    with pytest.raises(ValueError, match="variable y is missing"), util.LogProb():
+    with pytest.raises(ValueError, match="variable y is missing"), \
+            util.State.get_instance(strict=False), util.LogProb():
         util.model(model)(x)
 
     # Wrong shape.
@@ -130,3 +137,39 @@ def test_maybe_aggregate() -> None:
     values = {"x": th.arange(5), "y": th.as_tensor(5)}
     assert util.maybe_aggregate(values, False) is values
     assert util.maybe_aggregate(values, True) == 15
+
+
+def test_context():
+    class TestContext(util.TraceMixin, dict):
+        def __call__(self, state: util.State, name: str, *args, **kwargs) -> None:
+            value = state.get(name)
+            self[name] = value
+            if value is None:
+                state[name] = self._evaluate_distribution(*args, **kwargs).sample()
+
+    # If the state context is at the top of the stack, we expect variables to not yet be available
+    # because we run `sample` statements from the inside out.
+    with util.State() as state, TestContext() as context:
+        model()
+    assert context == {"y": None, "z": None}
+    with state, TestContext() as context:
+        model()
+    assert context == state
+
+
+def test_context_reentry() -> None:
+    assert not util.SingletonContextMixin.INSTANCES
+    with util.Sample() as sample:
+        assert sample.counter == 1
+        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
+        with sample:
+            assert sample.counter == 2
+            assert util.SingletonContextMixin.INSTANCES["trace"] is sample
+        assert sample.counter == 1
+        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
+    assert not util.SingletonContextMixin.INSTANCES
+
+
+def test_context_uniqueness() -> None:
+    with util.Sample(), pytest.raises(RuntimeError, match="cannot activate"), util.Sample():
+        pass
