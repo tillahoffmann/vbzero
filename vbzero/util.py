@@ -3,7 +3,7 @@ util
 ====
 """
 
-from collections.abc import Mapping, MutableMapping
+from __future__ import annotations
 import functools as ft
 from numbers import Integral
 import numpy as np
@@ -13,7 +13,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Callable, Iterable, List, Optional, Union, Type
+from typing import Any, Callable, Iterable, Optional, Union, Tuple, Type
 
 
 def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
@@ -34,63 +34,65 @@ def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size
     return th.Size(shape)
 
 
-class ContextMixin:
+class SingletonContextMixin:
     """
-    Baseclass for singleton contexts. Inheriting classes must override :meth:`sample` which handles
-    drawing of random variables for the context. The class-level :attr:`ORDER` attribute determines
-    the default application order of :meth:`sample` statements in relation to other contexts.
-
-    Args:
-        order: Application order of the context (defaults to :attr:`ORDER`).
+    Mixin for handling singletons that can act as contexts. The class-level :attr:`GROUP_KEY`
+    attribute determines the group an instance belongs to. Only one context of a given group can be
+    active.
     """
-    STACK: List["ContextMixin"] = []
+    INSTANCES: dict[str, SingletonContextMixin] = {}
+    GROUP_KEY = None
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def __enter__(self):
-        # If the context is already active, we can just increase the counter.
-        if self.counter:
-            self.counter += 1
-            return self
-        # Ensure there is not another context of the same type.
+    def __enter__(self) -> SingletonContextMixin:
         cls = self.__class__
-        if any(isinstance(context, cls) and context is not self for context in self.STACK):
-            breakpoint()
-            raise ValueError(f"an instance of {cls} is already active")
-        # Add the context to the stack.
-        self.STACK.append(self)
+        if cls.GROUP_KEY is None:
+            raise ValueError("inheriting classes must override the GROUP_KEY attribute")
+        instance = cls.INSTANCES.get(self.GROUP_KEY)
+        if instance is None:
+            cls.INSTANCES[self.GROUP_KEY] = self
+        elif instance is not self:
+            raise RuntimeError(f"cannot activate {self}; group {self.GROUP_KEY} already has an "
+                               f"active context {instance}")
         self.counter += 1
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args) -> None:
         self.counter -= 1
-        # We're not ready to drop the context.
-        if self.counter:
-            return
-        if (other := self.STACK.pop()) is not self:
-            raise RuntimeError(f"the context stack is messed up; expected {self} but got {other}")
+        if not self.counter and (other := self.INSTANCES.pop(self.GROUP_KEY)) is not self:
+            raise ValueError(f"expected {self} but got {other}")
 
     @classmethod
-    def get_instance(cls, strict: bool = True) -> "ContextMixin":
-        """
-        Get the active context instance or a new instance if :code:`strict` is false-y.
-
-        Args:
-            strict: Enforce that a context is active.
-
-        Returns:
-            Context instance.
-        """
-        for context in cls.STACK:
-            if isinstance(context, cls):
-                return context
+    def get_instance(cls, strict: bool = True) -> SingletonContextMixin:
+        if (instance := cls.INSTANCES.get(cls.GROUP_KEY)) is not None:
+            return instance
         if strict:
-            raise RuntimeError(f"{cls} context is not active")
+            raise RuntimeError(f"no active {cls}")
         return cls()
 
-    def _evaluate_distribution(self, dist_cls: Union[Distribution, Type[Distribution]], *args,
+    @classmethod
+    def is_active(cls) -> bool:
+        return cls.GROUP_KEY in cls.INSTANCES
+
+
+class State(SingletonContextMixin, dict):
+    GROUP_KEY = "state"
+
+    def __getitem__(self, key: Union[Tuple[str], str]) -> Any:
+        if isinstance(key, str):
+            return super().__getitem__(key)
+        # Cannot use super() in comprehension (https://stackoverflow.com/a/31895448/1150961).
+        return {x: dict.__getitem__(self, x) for x in key}
+
+
+class TraceMixin(SingletonContextMixin):
+    GROUP_KEY = "trace"
+
+    @staticmethod
+    def _evaluate_distribution(dist_cls: Union[Distribution, Type[Distribution]], *args,
                                sample_shape: Optional[th.Size] = None, **kwargs) -> Distribution:
         """
         Helper function to obtain a distribution instance for deferred evaluation.
@@ -102,53 +104,33 @@ class ContextMixin:
             normalize_shape(sample_shape)
         return distribution.expand(sample_shape)
 
-    def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-               sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         raise NotImplementedError
 
 
-class State(ContextMixin, dict):
+class Sample(TraceMixin):
     """
-    Dictionary-like context for managing the state of a model invocation. Values can only be set
-    once to ensure consistent state for each model invocation.
+    Sample random variables.
     """
-    def __getitem__(self, name: Union[str, Iterable[str]]) -> th.Tensor:
-        if isinstance(name, str):
-            return dict.__getitem__(self, name)
-        return {key: dict.__getitem__(self, key) for key in name}
-
-    def __setitem__(self, key: str, value: th.Tensor) -> None:
-        if key in self:
-            raise KeyError(f"key {key} has already been set")
-        return super().__setitem__(key, value)
-
-    def __delitem__(self, key: str) -> None:
-        raise KeyError(f"keys cannot be removed; attempted {key}")
-
-    def pop(self, key: str, *args) -> None:
-        raise KeyError(f"keys cannot be removed; attempted {key}")
-
-    def update(self, value: Mapping, **kwargs) -> None:
-        return MutableMapping.update(self, value, **kwargs)
-
-    def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-               sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
-        if (x := self.get(name)) is not None:
+    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
+        if (x := state.get(name)) is not None:
             return x
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
-        self[name] = dist.sample()
+        state[name] = dist.sample()
 
 
-class LogProb(ContextMixin, dict):
+class LogProb(TraceMixin, dict):
     """
-    Context for evaluating and storing log probabilities.
+    Evaluate and store log probabilities.
     """
-    def sample(self, name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-               sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         if name in self:
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         # We need all variables to be present to evaluate the log probability.
-        if (x := State.get_instance().get(name)) is None:
+        if (x := state.get(name)) is None:
             raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
         expected_shape = dist.batch_shape + dist.event_shape
@@ -174,18 +156,15 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     Returns:
         Value of the sampled variable.
     """
-    # State is special. We ensure it's there every time.
-    state = State.get_instance(strict=True)
-    # First validate the state for all active contexts and then apply them.
-    for context in reversed(ContextMixin.STACK):
-        context.sample(name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
-    # Return the variable value.
+    trace = TraceMixin.get_instance() if TraceMixin.is_active() else Sample()
+    state = State.get_instance()
+    trace(state, name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
     return state[name]
 
 
 def hyperparam(name: str, *names: str) -> Any:
     """
-    Get a hyperparameter by name.
+    Get hyperparameters by name.
 
     Args:
         name: Name of the hyperparameter.
@@ -194,12 +173,9 @@ def hyperparam(name: str, *names: str) -> Any:
         Value of the hyperparameter.
     """
     state = State.get_instance()
-    value = state[name]
     if names:
-        values = [value]
-        values.extend(state[name] for name in names)
-        return tuple(values)
-    return value
+        return tuple(state[x] for x in (name, *names))
+    return state[name]
 
 
 def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Callable:

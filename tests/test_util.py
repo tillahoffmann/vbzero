@@ -17,7 +17,7 @@ def model(x=5) -> None:
 
 def test_model_decorator() -> None:
     # Check that the model fails without state.
-    with pytest.raises(RuntimeError, match="context is not active"):
+    with pytest.raises(RuntimeError, match="no active <class '.*?State'>"):
         model(5)
 
     # Use explicit state.
@@ -54,6 +54,7 @@ def test_given_state() -> None:
     assert state["y", "z"] == {"y": 42, "z": 10}
 
 
+@pytest.mark.xfail(reason="write-once state not yet implemented")
 def test_state_once() -> None:
     state = util.State(a=1)
     with pytest.raises(KeyError):
@@ -73,6 +74,11 @@ def test_condition() -> None:
 
     conditioned2 = util.condition(conditioned, z=19)
     assert conditioned2(-19) == {"x1p": -18, "y": 37, "z": 19}
+
+
+@pytest.mark.xfail(reason="write-once state not yet implemented")
+def test_condition_write_once() -> None:
+    conditioned = util.condition(model, y=37)
 
     with pytest.raises(KeyError, match="key y has already been set"):
         util.condition(conditioned, y=18)(0)
@@ -133,38 +139,37 @@ def test_maybe_aggregate() -> None:
     assert util.maybe_aggregate(values, True) == 15
 
 
-def test_context_order():
-    class TestContext(util.ContextMixin):
-        def __init__(self) -> None:
-            super().__init__()
-            self.values = {}
-
-        def sample(self, name: str, *args, **kwargs) -> None:
-            self.values[name] = util.State.get_instance().get(name)
+def test_context():
+    class TestContext(util.TraceMixin, dict):
+        def __call__(self, state: util.State, name: str, *args, **kwargs) -> None:
+            value = state.get(name)
+            self[name] = value
+            if value is None:
+                state[name] = self._evaluate_distribution(*args, **kwargs).sample()
 
     # If the state context is at the top of the stack, we expect variables to not yet be available
     # because we run `sample` statements from the inside out.
-    with util.State(), TestContext() as inner:
+    with util.State() as state, TestContext() as context:
         model()
-
-    assert inner.values["y"] is None
-    assert inner.values["z"] is None
-
-    # If the state context is at the bottom of the stack, we expect variables to be available.
-    with TestContext() as outer, util.State():
+    assert context == {"y": None, "z": None}
+    with state, TestContext() as context:
         model()
-    assert isinstance(outer.values["y"], th.Tensor)
-    assert isinstance(outer.values["z"], th.Tensor)
+    assert context == state
 
 
-def test_context_stack() -> None:
-    assert not util.ContextMixin.STACK
-    with util.State() as state:
-        assert state.counter == 1
-        assert util.ContextMixin.STACK == [state]
-        with state:
-            assert state.counter == 2
-            assert util.ContextMixin.STACK == [state]
-        assert state.counter == 1
-        assert util.ContextMixin.STACK == [state]
-    assert not util.ContextMixin.STACK
+def test_context_reentry() -> None:
+    assert not util.SingletonContextMixin.INSTANCES
+    with util.Sample() as sample:
+        assert sample.counter == 1
+        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
+        with sample:
+            assert sample.counter == 2
+            assert util.SingletonContextMixin.INSTANCES["trace"] is sample
+        assert sample.counter == 1
+        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
+    assert not util.SingletonContextMixin.INSTANCES
+
+
+def test_context_uniqueness() -> None:
+    with util.Sample(), pytest.raises(RuntimeError, match="cannot activate"), util.Sample():
+        pass
