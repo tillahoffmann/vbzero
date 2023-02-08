@@ -173,3 +173,18 @@ def test_context_reentry() -> None:
 def test_context_uniqueness() -> None:
     with util.Sample(), pytest.raises(RuntimeError, match="cannot activate"), util.Sample():
         pass
+
+
+def test_state_creation() -> None:
+    state = util.State(x=5)
+    other = state.copy()
+    assert isinstance(other, util.State)
+    assert other == state
+    assert other is not state
+
+    other = state | {"y": 3}
+    assert isinstance(other, util.State)
+    assert other is not state
+
+    state |= {"y": 3}
+    assert state == {"x": 5, "y": 3}

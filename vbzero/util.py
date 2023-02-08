@@ -87,6 +87,16 @@ class State(SingletonContextMixin, dict):
         # Cannot use super() in comprehension (https://stackoverflow.com/a/31895448/1150961).
         return {x: dict.__getitem__(self, x) for x in key}
 
+    def __or__(self, other: State) -> State:
+        new = self.copy()
+        new.update(other)
+        return new
+
+    def copy(self) -> State:
+        new = State()
+        new.update(self)
+        return new
+
 
 class TraceMixin(SingletonContextMixin):
     GROUP_KEY = "trace"
