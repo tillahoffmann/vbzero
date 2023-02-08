@@ -17,7 +17,7 @@ def model(x=5) -> None:
 
 def test_model_decorator() -> None:
     # Check that the model fails without state.
-    with pytest.raises(RuntimeError, match="no active <class '.*?State'>"):
+    with pytest.raises(RuntimeError, match="no active state"):
         model(5)
 
     # Use explicit state.
@@ -92,7 +92,7 @@ def test_log_prob_context() -> None:
     y = th.as_tensor(19.)
     z = th.as_tensor(21.)
     with util.LogProb() as log_prob:
-        assert util.TraceMixin.INSTANCE is log_prob
+        assert util.TraceMixin.INSTANCES["trace"] is log_prob
         util.condition(model, y=y, z=z)(x)
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(x, 1).log_prob(y))
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(y, 1).log_prob(z))
@@ -108,8 +108,7 @@ def test_log_prob_context_invalid() -> None:
         conditioned(x)
 
     # Check that missing values raise errors.
-    with pytest.raises(ValueError, match="variable y is missing"), \
-            util.State.get_instance(strict=False), util.LogProb():
+    with pytest.raises(ValueError, match="variable y is missing"), util.LogProb():
         util.model(model)(x)
 
     # Wrong shape.
@@ -159,17 +158,18 @@ def test_context():
 
 
 def test_context_reentry() -> None:
-    assert not util.TraceMixin.INSTANCE
+    assert not util.TraceMixin.INSTANCES
     with util.Sample() as sample:
-        assert util.TraceMixin.INSTANCE is sample
-        with pytest.raises(RuntimeError), sample:
+        assert util.TraceMixin.INSTANCES["trace"] is sample
+        with pytest.raises(RuntimeError, match="with key trace is already active"), util.Sample():
             pass
-        assert util.TraceMixin.INSTANCE is sample
-    assert not util.TraceMixin.INSTANCE
+        assert util.TraceMixin.INSTANCES["trace"] is sample
+    assert not util.TraceMixin.INSTANCES
 
 
 def test_context_uniqueness() -> None:
-    with util.Sample(), pytest.raises(RuntimeError, match="cannot activate"), util.Sample():
+    with util.Sample(), pytest.raises(RuntimeError, match="with key trace is already active"), \
+            util.Sample():
         pass
 
 

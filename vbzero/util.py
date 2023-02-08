@@ -13,7 +13,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Callable, Iterable, List, Optional, Union, Tuple, Type
+from typing import Any, Callable, Dict, Iterable, Optional, Union, Tuple, Type
 
 
 def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
@@ -34,30 +34,46 @@ def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size
     return th.Size(shape)
 
 
-class State(dict):
-    STACK: List[State] = []
+class SingletonContextMixin:
+    """
+    Mixin to manage singletons, one for each unique :attr:`SINGLETON_KEY`. Inheriting classes must
+    override :attr:`SINGLETON_KEY` to declare the group they belong to.
+    """
+    INSTANCES: Dict[str, SingletonContextMixin] = {}
+    SINGLETON_KEY = None
 
-    def __enter__(self) -> State:
-        self.STACK.append(self)
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.counter = 0
+
+    def __enter__(self) -> SingletonContextMixin:
+        if self.SINGLETON_KEY is None:
+            raise RuntimeError(f"inheriting class {self.__class__} must override SINGLETON_KEY")
+        other = self.INSTANCES.setdefault(self.SINGLETON_KEY, self)
+        if other is not self:
+            raise RuntimeError(f"singleton {other} with key {self.SINGLETON_KEY} is already active")
+        self.counter += 1
         return self
 
     def __exit__(self, *args) -> None:
-        if (other := self.STACK.pop()) is not self:
-            raise RuntimeError(f"incosistent stack; expected {self} but got {other}")
+        self.counter -= 1
+        if self.counter == 0 and (other := self.INSTANCES.pop(self.SINGLETON_KEY)) is not self:
+            raise ValueError(f"expected singleton {self} but got {other}")
 
     @classmethod
-    def get_instance(cls, strict: bool = True) -> State:
-        if cls.STACK:
-            return cls.STACK[-1]
-        if strict:
-            raise RuntimeError(f"no active {cls}")
-        return cls()
+    def get_instance(cls) -> Optional[SingletonContextMixin]:
+        """
+        Get the active singleton context if available.
+        """
+        if (instance := cls.INSTANCES.get(cls.SINGLETON_KEY)) is not None:
+            return instance
 
-    def __getitem__(self, key: Union[Tuple[str], str]) -> Any:
-        if isinstance(key, str):
-            return super().__getitem__(key)
-        # Cannot use super() in comprehension (https://stackoverflow.com/a/31895448/1150961).
-        return {x: dict.__getitem__(self, x) for x in key}
+
+class State(SingletonContextMixin, dict):
+    """
+    State for model invocations.
+    """
+    SINGLETON_KEY = "state"
 
     def __or__(self, other: State) -> State:
         new = self.copy()
@@ -69,21 +85,18 @@ class State(dict):
         new.update(self)
         return new
 
+    def __getitem__(self, key: Union[str, Tuple[str]]) -> Union[th.Tensor, Dict[str, th.Tensor]]:
+        if isinstance(key, str):
+            return super().__getitem__(key)
+        return {x: dict.__getitem__(self, x) for x in key}
 
-class TraceMixin:
-    INSTANCE: Optional[TraceMixin] = None
 
-    def __enter__(self) -> State:
-        if TraceMixin.INSTANCE is not None:
-            raise RuntimeError(f"cannot activate {self} because {TraceMixin.INSTANCE} is active")
-        TraceMixin.INSTANCE = self
-        return TraceMixin.INSTANCE
-
-    def __exit__(self, *args) -> None:
-        if TraceMixin.INSTANCE is not self:
-            raise RuntimeError(f"inconsistent context; expected {self} but got "
-                               f"{TraceMixin.INSTANCE}")
-        TraceMixin.INSTANCE = None
+class TraceMixin(SingletonContextMixin):
+    """
+    Mixin for tracing the invocation of models, e.g., to :class:`Sample` or evaluate
+    :class:`LogProb`.
+    """
+    SINGLETON_KEY = "trace"
 
     @staticmethod
     def _evaluate_distribution(dist_cls: Union[Distribution, Type[Distribution]], *args,
@@ -124,6 +137,7 @@ class LogProb(TraceMixin, dict):
         if name in self:
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         # We need all variables to be present to evaluate the log probability.
+        x: th.Tensor
         if (x := state.get(name)) is None:
             raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
@@ -150,8 +164,9 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     Returns:
         Value of the sampled variable.
     """
-    trace = Sample() if TraceMixin.INSTANCE is None else TraceMixin.INSTANCE
-    state = State.get_instance()
+    trace = Sample() if (x := TraceMixin.get_instance()) is None else x
+    if (state := State.get_instance()) is None:
+        raise RuntimeError("no active state")
     trace(state, name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
     return state[name]
 
@@ -185,11 +200,12 @@ def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Call
     """
     @ft.wraps(func)
     def _wrapper(*args, **kwargs) -> Any:
-        # We make a copy of the state so we don't modify the original context.
-        with State.get_instance(strict=False).copy() as state:
-            for value in values:
-                state.update(value)
-            state.update(kwvalues)
+        # Get the state or create a new one and update it with the given values.
+        state = State() if (x := State.get_instance()) is None else x
+        for value in values:
+            state.update(value)
+        state.update(kwvalues)
+        with state:
             return func(*args, **kwargs)
     return _wrapper
 
@@ -288,7 +304,8 @@ def model(func: Optional[Callable] = None, *, return_state: bool = False) -> Cal
     if func:  # Directly wrap the callable.
         @ft.wraps(func)
         def _wrapper(*args, **kwargs) -> Any:
-            with State.get_instance(strict=False) as state:
+            state = State() if (x := State.get_instance()) is None else x
+            with state:
                 result = func(*args, **kwargs)
             if return_state:
                 return state if result is None else (result, state)
