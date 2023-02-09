@@ -147,9 +147,15 @@ class LogProb(TraceMixin, dict):
                              f"{x.shape}")
         self[name] = dist.log_prob(x)
 
+    def __exit__(self, exception_type: Optional[Type[Exception]], *args) -> None:
+        super().__exit__(*args)
+        # Only raise this exception if everything else worked out fine.
+        if not self and not exception_type:
+            raise ValueError("no log probs evaluated; did you invoke the model?")
+
 
 def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-           sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+           sample_shape: Optional[th.Size] = None, **kwargs) -> th.Tensor:
     """
     Sample a value from a distribution.
 
