@@ -177,6 +177,16 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     return state[name]
 
 
+def record(name: str, value: th.Tensor) -> th.Tensor:
+    """
+    Record a value that is not a random variable.
+    """
+    if (state := State.get_instance()) is None:
+        raise RuntimeError("no active state")
+    state[name] = value
+    return value
+
+
 def hyperparam(name: str, *names: str) -> Any:
     """
     Get hyperparameters by name.
