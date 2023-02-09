@@ -43,5 +43,13 @@ class DistributionDict(Distribution):
         ent = {name: distribution.entropy() for name, distribution in self.distributions.items()}
         return maybe_aggregate(ent, aggregate)
 
+    @property
+    def mean(self) -> dict:
+        return {name: distribution.mean for name, distribution in self.distributions.items()}
+
+    @property
+    def mode(self):
+        return {name: distribution.mode for name, distribution in self.distributions.items()}
+
     def __getitem__(self, name: str) -> Distribution:
         return self.distributions[name]

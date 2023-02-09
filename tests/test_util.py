@@ -17,7 +17,7 @@ def model(x=5) -> None:
 
 def test_model_decorator() -> None:
     # Check that the model fails without state.
-    with pytest.raises(RuntimeError, match="no active <class '.*?State'>"):
+    with pytest.raises(RuntimeError, match="no active state"):
         model(5)
 
     # Use explicit state.
@@ -92,6 +92,7 @@ def test_log_prob_context() -> None:
     y = th.as_tensor(19.)
     z = th.as_tensor(21.)
     with util.LogProb() as log_prob:
+        assert util.TraceMixin.INSTANCES["trace"] is log_prob
         util.condition(model, y=y, z=z)(x)
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(x, 1).log_prob(y))
     np.testing.assert_allclose(log_prob["y"], th.distributions.Normal(y, 1).log_prob(z))
@@ -107,8 +108,7 @@ def test_log_prob_context_invalid() -> None:
         conditioned(x)
 
     # Check that missing values raise errors.
-    with pytest.raises(ValueError, match="variable y is missing"), \
-            util.State.get_instance(strict=False), util.LogProb():
+    with pytest.raises(ValueError, match="variable y is missing"), util.LogProb():
         util.model(model)(x)
 
     # Wrong shape.
@@ -141,11 +141,12 @@ def test_maybe_aggregate() -> None:
 
 def test_context():
     class TestContext(util.TraceMixin, dict):
-        def __call__(self, state: util.State, name: str, *args, **kwargs) -> None:
+        def sample(self, state: util.State, name: str, *args, **kwargs) -> None:
             value = state.get(name)
             self[name] = value
             if value is None:
-                state[name] = self._evaluate_distribution(*args, **kwargs).sample()
+                state[name] = value = self._evaluate_distribution(*args, **kwargs).sample()
+            return value
 
     # If the state context is at the top of the stack, we expect variables to not yet be available
     # because we run `sample` statements from the inside out.
@@ -158,18 +159,40 @@ def test_context():
 
 
 def test_context_reentry() -> None:
-    assert not util.SingletonContextMixin.INSTANCES
+    assert not util.TraceMixin.INSTANCES
     with util.Sample() as sample:
-        assert sample.counter == 1
-        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
-        with sample:
-            assert sample.counter == 2
-            assert util.SingletonContextMixin.INSTANCES["trace"] is sample
-        assert sample.counter == 1
-        assert util.SingletonContextMixin.INSTANCES["trace"] is sample
-    assert not util.SingletonContextMixin.INSTANCES
+        assert util.TraceMixin.INSTANCES["trace"] is sample
+        with pytest.raises(RuntimeError, match="with key trace is already active"), util.Sample():
+            pass
+        assert util.TraceMixin.INSTANCES["trace"] is sample
+    assert not util.TraceMixin.INSTANCES
 
 
-def test_context_uniqueness() -> None:
-    with util.Sample(), pytest.raises(RuntimeError, match="cannot activate"), util.Sample():
-        pass
+def test_state_creation() -> None:
+    state = util.State(x=5)
+    other = state.copy()
+    assert isinstance(other, util.State)
+    assert other == state
+    assert other is not state
+
+    other = state | {"y": 3}
+    assert isinstance(other, util.State)
+    assert other is not state
+
+    state |= {"y": 3}
+    assert state == {"x": 5, "y": 3}
+
+
+def test_record() -> None:
+    def model():
+        x = util.sample("x", th.distributions.Normal(0, 1))
+        util.record("x1p", x + 1)
+
+    with util.State() as state:
+        model()
+    assert state["x"] + 1 == state["x1p"]
+
+    with util.State(x=th.as_tensor(5.)) as state, util.LogProb():
+        model()
+    # Check that we don't record extra values as part of evaluating log probs.
+    assert state == {"x": 5}

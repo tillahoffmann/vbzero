@@ -13,7 +13,7 @@ from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from typing import Any, Callable, Iterable, Optional, Union, Tuple, Type
+from typing import Any, Callable, Dict, Iterable, Optional, Union, Tuple, Type
 
 
 def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size:
@@ -36,60 +36,67 @@ def normalize_shape(shape: Optional[Union[Integral, tuple, th.Size]]) -> th.Size
 
 class SingletonContextMixin:
     """
-    Mixin for handling singletons that can act as contexts. The class-level :attr:`GROUP_KEY`
-    attribute determines the group an instance belongs to. Only one context of a given group can be
-    active.
+    Mixin to manage singletons, one for each unique :attr:`SINGLETON_KEY`. Inheriting classes must
+    override :attr:`SINGLETON_KEY` to declare the group they belong to.
     """
-    INSTANCES: dict[str, SingletonContextMixin] = {}
-    GROUP_KEY = None
+    INSTANCES: Dict[str, SingletonContextMixin] = {}
+    SINGLETON_KEY = None
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.counter = 0
 
     def __enter__(self) -> SingletonContextMixin:
-        cls = self.__class__
-        if cls.GROUP_KEY is None:
-            raise ValueError("inheriting classes must override the GROUP_KEY attribute")
-        instance = cls.INSTANCES.get(self.GROUP_KEY)
-        if instance is None:
-            cls.INSTANCES[self.GROUP_KEY] = self
-        elif instance is not self:
-            raise RuntimeError(f"cannot activate {self}; group {self.GROUP_KEY} already has an "
-                               f"active context {instance}")
+        if self.SINGLETON_KEY is None:
+            raise RuntimeError(f"inheriting class {self.__class__} must override SINGLETON_KEY")
+        other = self.INSTANCES.setdefault(self.SINGLETON_KEY, self)
+        if other is not self:
+            raise RuntimeError(f"singleton {other} with key {self.SINGLETON_KEY} is already active")
         self.counter += 1
         return self
 
     def __exit__(self, *args) -> None:
         self.counter -= 1
-        if not self.counter and (other := self.INSTANCES.pop(self.GROUP_KEY)) is not self:
-            raise ValueError(f"expected {self} but got {other}")
+        if self.counter == 0 and (other := self.INSTANCES.pop(self.SINGLETON_KEY)) is not self:
+            raise ValueError(f"expected singleton {self} but got {other}")
 
     @classmethod
-    def get_instance(cls, strict: bool = True) -> SingletonContextMixin:
-        if (instance := cls.INSTANCES.get(cls.GROUP_KEY)) is not None:
+    def get_instance(cls) -> Optional[SingletonContextMixin]:
+        """
+        Get the active singleton context if available.
+        """
+        if (instance := cls.INSTANCES.get(cls.SINGLETON_KEY)) is not None:
             return instance
-        if strict:
-            raise RuntimeError(f"no active {cls}")
-        return cls()
-
-    @classmethod
-    def is_active(cls) -> bool:
-        return cls.GROUP_KEY in cls.INSTANCES
 
 
 class State(SingletonContextMixin, dict):
-    GROUP_KEY = "state"
+    """
+    State for model invocations.
+    """
+    SINGLETON_KEY = "state"
 
-    def __getitem__(self, key: Union[Tuple[str], str]) -> Any:
+    def __or__(self, other: State) -> State:
+        new = self.copy()
+        new.update(other)
+        return new
+
+    def copy(self) -> State:
+        new = State()
+        new.update(self)
+        return new
+
+    def __getitem__(self, key: Union[str, Tuple[str]]) -> Union[th.Tensor, Dict[str, th.Tensor]]:
         if isinstance(key, str):
             return super().__getitem__(key)
-        # Cannot use super() in comprehension (https://stackoverflow.com/a/31895448/1150961).
         return {x: dict.__getitem__(self, x) for x in key}
 
 
 class TraceMixin(SingletonContextMixin):
-    GROUP_KEY = "trace"
+    """
+    Mixin for tracing the invocation of models, e.g., to :class:`Sample` or evaluate
+    :class:`LogProb`.
+    """
+    SINGLETON_KEY = "trace"
 
     @staticmethod
     def _evaluate_distribution(dist_cls: Union[Distribution, Type[Distribution]], *args,
@@ -104,32 +111,43 @@ class TraceMixin(SingletonContextMixin):
             normalize_shape(sample_shape)
         return distribution.expand(sample_shape)
 
-    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
-                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
+    def sample(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+               *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         raise NotImplementedError
+
+    def record(self, state: State, name: str, value: Any) -> None:
+        return value
 
 
 class Sample(TraceMixin):
     """
     Sample random variables.
     """
-    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
-                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
+    def sample(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+               *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         if (x := state.get(name)) is not None:
             return x
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
-        state[name] = dist.sample()
+        state[name] = x = dist.sample()
+        return x
+
+    def record(self, state: State, name: str, value: Any) -> None:
+        if name in state:
+            raise ValueError(f"{name} is already set")
+        state[name] = value
+        return value
 
 
 class LogProb(TraceMixin, dict):
     """
     Evaluate and store log probabilities.
     """
-    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
-                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
+    def sample(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+               *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         if name in self:
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         # We need all variables to be present to evaluate the log probability.
+        x: th.Tensor
         if (x := state.get(name)) is None:
             raise ValueError(f"cannot evaluate log probability because variable {name} is missing")
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
@@ -138,10 +156,17 @@ class LogProb(TraceMixin, dict):
             raise ValueError(f"expected shape {expected_shape} for variable {name} but got "
                              f"{x.shape}")
         self[name] = dist.log_prob(x)
+        return x
+
+    def __exit__(self, exception_type: Optional[Type[Exception]], *args) -> None:
+        super().__exit__(*args)
+        # Only raise this exception if everything else worked out fine.
+        if not self and not exception_type:
+            raise ValueError("no log probs evaluated; did you invoke the model?")
 
 
 def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
-           sample_shape: Optional[th.Size] = None, **kwargs) -> Any:
+           sample_shape: Optional[th.Size] = None, **kwargs) -> th.Tensor:
     """
     Sample a value from a distribution.
 
@@ -156,10 +181,20 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     Returns:
         Value of the sampled variable.
     """
-    trace = TraceMixin.get_instance() if TraceMixin.is_active() else Sample()
-    state = State.get_instance()
-    trace(state, name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
-    return state[name]
+    trace = Sample() if (x := TraceMixin.get_instance()) is None else x
+    if (state := State.get_instance()) is None:
+        raise RuntimeError("no active state")
+    return trace.sample(state, name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
+
+
+def record(name: str, value: th.Tensor) -> th.Tensor:
+    """
+    Record a value that is not a random variable.
+    """
+    trace = Sample() if (x := TraceMixin.get_instance()) is None else x
+    if (state := State.get_instance()) is None:
+        raise RuntimeError("no active state")
+    return trace.record(state, name, value)
 
 
 def hyperparam(name: str, *names: str) -> Any:
@@ -191,10 +226,12 @@ def condition(func: Callable, *values: Iterable[dict], **kwvalues: dict) -> Call
     """
     @ft.wraps(func)
     def _wrapper(*args, **kwargs) -> Any:
-        with State.get_instance(strict=False) as state:
-            for value in values:
-                state.update(value)
-            state.update(kwvalues)
+        # Get the state or create a new one and update it with the given values.
+        state = State() if (x := State.get_instance()) is None else x
+        for value in values:
+            state.update(value)
+        state.update(kwvalues)
+        with state:
             return func(*args, **kwargs)
     return _wrapper
 
@@ -293,7 +330,8 @@ def model(func: Optional[Callable] = None, *, return_state: bool = False) -> Cal
     if func:  # Directly wrap the callable.
         @ft.wraps(func)
         def _wrapper(*args, **kwargs) -> Any:
-            with State.get_instance(strict=False) as state:
+            state = State() if (x := State.get_instance()) is None else x
+            with state:
                 result = func(*args, **kwargs)
             if return_state:
                 return state if result is None else (result, state)

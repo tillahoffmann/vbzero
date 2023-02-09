@@ -12,9 +12,9 @@ from .approximation import DistributionDict
 from .util import condition, maybe_aggregate, LogProb
 
 
-class ParametrizedDistribution(Module):
+class ParameterizedDistribution(Module):
     """
-    Parametrized distribution with initial conditions. Parameters are transformed to an
+    Parameterized distribution with initial conditions. Parameters are transformed to an
     unconstrained space for optimization, and the distribution is constructed by transforming back
     to the constrained space in the forward pass.
 
