@@ -19,8 +19,8 @@ def test_integration() -> None:
 
     # Parameterize the variational approximation for optimization.
     distributions = vz.nn.ParameterizedDistributionDict({
-        "proba": vz.nn.ParametrizedDistribution(th.distributions.Beta, concentration0=1,
-                                                concentration1=1),
+        "proba": vz.nn.ParameterizedDistribution(th.distributions.Beta, concentration0=1,
+                                                 concentration1=1),
     })
 
     # Create the loss and optimizer.
