@@ -141,11 +141,12 @@ def test_maybe_aggregate() -> None:
 
 def test_context():
     class TestContext(util.TraceMixin, dict):
-        def __call__(self, state: util.State, name: str, *args, **kwargs) -> None:
+        def sample(self, state: util.State, name: str, *args, **kwargs) -> None:
             value = state.get(name)
             self[name] = value
             if value is None:
-                state[name] = self._evaluate_distribution(*args, **kwargs).sample()
+                state[name] = value = self._evaluate_distribution(*args, **kwargs).sample()
+            return value
 
     # If the state context is at the top of the stack, we expect variables to not yet be available
     # because we run `sample` statements from the inside out.
@@ -186,3 +187,18 @@ def test_state_creation() -> None:
 
     state |= {"y": 3}
     assert state == {"x": 5, "y": 3}
+
+
+def test_record() -> None:
+    def model():
+        x = util.sample("x", th.distributions.Normal(0, 1))
+        util.record("x1p", x + 1)
+
+    with util.State() as state:
+        model()
+    assert state["x"] + 1 == state["x1p"]
+
+    with util.State(x=th.as_tensor(5.)) as state, util.LogProb():
+        model()
+    # Check that we don't record extra values as part of evaluating log probs.
+    assert state == {"x": 5}

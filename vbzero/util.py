@@ -111,29 +111,39 @@ class TraceMixin(SingletonContextMixin):
             normalize_shape(sample_shape)
         return distribution.expand(sample_shape)
 
-    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
-                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
+    def sample(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+               *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         raise NotImplementedError
+
+    def record(self, state: State, name: str, value: Any) -> None:
+        return value
 
 
 class Sample(TraceMixin):
     """
     Sample random variables.
     """
-    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
-                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
+    def sample(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+               *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         if (x := state.get(name)) is not None:
             return x
         dist = self._evaluate_distribution(dist_cls, *args, **kwargs, sample_shape=sample_shape)
-        state[name] = dist.sample()
+        state[name] = x = dist.sample()
+        return x
+
+    def record(self, state: State, name: str, value: Any) -> None:
+        if name in state:
+            raise ValueError(f"{name} is already set")
+        state[name] = value
+        return value
 
 
 class LogProb(TraceMixin, dict):
     """
     Evaluate and store log probabilities.
     """
-    def __call__(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
-                 *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
+    def sample(self, state: State, name: str, dist_cls: Union[Distribution, Type[Distribution]],
+               *args, sample_shape: Optional[th.Size] = None, **kwargs) -> None:
         if name in self:
             raise RuntimeError(f"log probability has already been evaluated for variable {name}")
         # We need all variables to be present to evaluate the log probability.
@@ -146,6 +156,7 @@ class LogProb(TraceMixin, dict):
             raise ValueError(f"expected shape {expected_shape} for variable {name} but got "
                              f"{x.shape}")
         self[name] = dist.log_prob(x)
+        return x
 
     def __exit__(self, exception_type: Optional[Type[Exception]], *args) -> None:
         super().__exit__(*args)
@@ -173,18 +184,17 @@ def sample(name: str, dist_cls: Union[Distribution, Type[Distribution]], *args,
     trace = Sample() if (x := TraceMixin.get_instance()) is None else x
     if (state := State.get_instance()) is None:
         raise RuntimeError("no active state")
-    trace(state, name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
-    return state[name]
+    return trace.sample(state, name, dist_cls, *args, **kwargs, sample_shape=sample_shape)
 
 
 def record(name: str, value: th.Tensor) -> th.Tensor:
     """
     Record a value that is not a random variable.
     """
+    trace = Sample() if (x := TraceMixin.get_instance()) is None else x
     if (state := State.get_instance()) is None:
         raise RuntimeError("no active state")
-    state[name] = value
-    return value
+    return trace.record(state, name, value)
 
 
 def hyperparam(name: str, *names: str) -> Any:
