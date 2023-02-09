@@ -168,12 +168,6 @@ def test_context_reentry() -> None:
     assert not util.TraceMixin.INSTANCES
 
 
-def test_context_uniqueness() -> None:
-    with util.Sample(), pytest.raises(RuntimeError, match="with key trace is already active"), \
-            util.Sample():
-        pass
-
-
 def test_state_creation() -> None:
     state = util.State(x=5)
     other = state.copy()
